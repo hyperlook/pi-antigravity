@@ -940,9 +940,11 @@ export function friendlyAntigravityError(status: number | undefined, text: strin
     // alone wrongly marked transient throttling as a hard quota wall, disabling
     // Pi's automatic retry backoff. Keep real quota walls non-retryable, and
     // format transient throttling so Pi's retry mechanism engages.
+    const isMinuteOrSecondLimit = /per\s*(?:minute|second|min|sec)|rpm|tpm|qps/i.test(msg);
     const hardLimit =
       Boolean(wait) ||
-      (!/rate.?limit/i.test(msg) &&
+      (!isMinuteOrSecondLimit &&
+        !/rate.?limit/i.test(msg) &&
         /quota exceeded|exceeded your|limit reached|reached your|daily limit/i.test(msg));
     if (hardLimit) {
       return `Quota reached.${wait ? ` Please wait ${wait}.` : ""} Next: switch models or retry later.`;
@@ -1393,11 +1395,15 @@ export function streamAntigravity(
             setLastStatus(response.status);
             if (response.ok) break;
             lastText = await response.text();
+            const isMinuteOrSecondLimit = /per\s*(?:minute|second|min|sec)|rpm|tpm|qps/i.test(
+              lastText,
+            );
             if (
               response.status === 429 &&
               (/Individual quota reached/i.test(lastText) ||
                 /Resets? in /i.test(lastText) ||
-                (!/rate.?limit/i.test(lastText) &&
+                (!isMinuteOrSecondLimit &&
+                  !/rate.?limit/i.test(lastText) &&
                   /quota exceeded|exceeded your|daily limit/i.test(lastText)))
             ) {
               break;

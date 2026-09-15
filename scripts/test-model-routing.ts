@@ -631,7 +631,24 @@ const rateLimitReachedError = friendlyAntigravityError(429, "Rate limit reached,
 assert.match(rateLimitReachedError, /Rate limited by Antigravity \(429 ResourceExhausted\)/);
 assert.ok(!/Quota reached/i.test(rateLimitReachedError));
 
+// Google Cloud standard per-minute quota exceeded error should also be retryable
+const perMinuteQuotaError = friendlyAntigravityError(
+  429,
+  "Quota exceeded for quota metric 'Generate Content API requests' and limit 'Generate Content API requests per minute'.",
+);
+assert.match(perMinuteQuotaError, /Rate limited by Antigravity \(429 ResourceExhausted\)/);
+assert.ok(!/Quota reached/i.test(perMinuteQuotaError));
+
 // Verify compatibility with Pi's retry classifier
+assert.equal(
+  isRetryableAssistantError({
+    role: "assistant",
+    stopReason: "error",
+    errorMessage: perMinuteQuotaError,
+  } as unknown as Parameters<typeof isRetryableAssistantError>[0]),
+  true,
+  "per-minute quota error must be retryable by Pi",
+);
 assert.equal(
   isRetryableAssistantError({
     role: "assistant",
