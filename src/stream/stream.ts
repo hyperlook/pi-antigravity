@@ -1,6 +1,10 @@
 import {
   calculateCost,
+  collapseSystemMessages,
   createAssistantMessageEventStream,
+  getCurrentSystemPrompt,
+  getCurrentTools,
+  normalizeContext,
   type Api,
   type AssistantMessage,
   type AssistantMessageEventStream,
@@ -9,6 +13,7 @@ import {
   type TextContent,
   type Tool,
   type ToolCall,
+  type TranscriptContext,
 } from "@earendil-works/pi-ai";
 import {
   antigravityHeaders,
@@ -199,16 +204,28 @@ function appendTurn(contents: GeminiContent[], role: GeminiRole, parts: GeminiPa
   }
 }
 
+function hasLegacyContextFields(context: Context | TranscriptContext): context is Context {
+  return "systemPrompt" in context || "tools" in context;
+}
+
+/** Pi 0.86+ passes TranscriptContext; tests may still construct a raw Context. */
+function toTranscript(context: Context | TranscriptContext): TranscriptContext {
+  return collapseSystemMessages(
+    hasLegacyContextFields(context) ? normalizeContext(context) : context,
+  );
+}
+
 /** Exported for unit tests. */
 export function convertMessages(
   model: Model<Api>,
-  context: Context,
+  context: Context | TranscriptContext,
   runtimeModel: string,
 ): GeminiContent[] {
   const contents: GeminiContent[] = [];
   const requiresSig = geminiRequiresThoughtSignature(runtimeModel);
   const droppedToolCallIds = new Map<string, string>();
-  for (const msg of context.messages) {
+  for (const msg of toTranscript(context).messages) {
+    if (msg.role === "system") continue;
     if (msg.role === "user") {
       const parts = asTextParts(msg.content);
       appendTurn(contents, GeminiRole.User, parts);
@@ -777,26 +794,29 @@ function mapToolChoiceMode(
 /** Exported for unit tests. */
 export function buildRequest(
   model: Model<Api>,
-  context: Context,
+  context: Context | TranscriptContext,
   projectId: string,
   options: AntigravityStreamOptions,
   runtimeModel: string,
 ): AntigravityGenerateRequest {
-  const injectedSkills = context.messages.flatMap((msg) =>
+  const transcript = toTranscript(context);
+  const systemPrompt = getCurrentSystemPrompt(transcript.messages);
+  const currentTools = getCurrentTools(transcript.messages);
+  const injectedSkills = transcript.messages.flatMap((msg) =>
     msg.role === "user" ? skillBlocks(msg.content) : [],
   );
-  const systemParts = context.systemPrompt
-    ? [{ text: sanitizeText(context.systemPrompt) }]
+  const systemParts = systemPrompt
+    ? [{ text: sanitizeText(systemPrompt) }]
     : [{ text: ANTIGRAVITY_SYSTEM_INSTRUCTION }, { text: ANTIGRAVITY_NO_PREAMBLE_INSTRUCTION }];
   systemParts.push(...injectedSkills.map((skill) => ({ text: sanitizeText(skill) })));
 
-  const contents = convertMessages(model, context, runtimeModel);
+  const contents = convertMessages(model, transcript, runtimeModel);
   const hasUserText = contents.some(
     (turn) =>
       turn.role === GeminiRole.User &&
       turn.parts.some((part) => "text" in part && Boolean(part.text.trim())),
   );
-  if (!hasUserText && (injectedSkills.length > 0 || Boolean(context.systemPrompt))) {
+  if (!hasUserText && (injectedSkills.length > 0 || Boolean(systemPrompt))) {
     contents.unshift({
       role: GeminiRole.User,
       parts: [{ text: "Apply the active system instructions." }],
@@ -824,7 +844,7 @@ export function buildRequest(
   if (Object.keys(generationConfig).length) request.generationConfig = generationConfig;
 
   const isClaude = model.id.startsWith("claude-") || runtimeModel.startsWith("claude-");
-  const tools = convertTools(context.tools, isClaude || model.id.startsWith("gpt-oss-"));
+  const tools = convertTools(currentTools, isClaude || model.id.startsWith("gpt-oss-"));
   if (tools) {
     request.tools = tools;
   }
@@ -849,12 +869,11 @@ export function buildRequest(
   //   In multi-turn agent loops (with tools), every completed assistant response increments the request counter.
   const step = Math.max(1, request.contents.length);
   const lastStepIndex = String(Math.max(0, request.contents.length - 1));
-  const requestIndex =
-    context.messages?.filter(
-      (m) => m.role === "assistant" && m.stopReason !== "error" && m.stopReason !== "aborted",
-    ).length ?? 0;
+  const requestIndex = transcript.messages.filter(
+    (m) => m.role === "assistant" && m.stopReason !== "error" && m.stopReason !== "aborted",
+  ).length;
 
-  const { conversationId, trajectoryId } = resolveSessionTrajectory(context);
+  const { conversationId, trajectoryId } = resolveSessionTrajectory(transcript);
 
   const envelope = antigravityRequestEnvelope(runtimeModel, {
     isClaude,
@@ -1319,7 +1338,7 @@ export async function streamResponse(
 
 export function streamAntigravity(
   model: Model<Api>,
-  context: Context,
+  context: Context | TranscriptContext,
   options?: AntigravityStreamOptions,
 ): AssistantMessageEventStream {
   const stream = createAssistantMessageEventStream();
@@ -1493,9 +1512,12 @@ export function streamAntigravity(
       if (!received) throw new Error("Antigravity API returned an empty response");
       setLastLatencyMs(Date.now() - startTime);
       if (output.stopReason === "error" || output.stopReason === "aborted") {
-        const errorDetail = output.rawStopReason
-          ? `Provider stopped with: ${output.rawStopReason}`
-          : "An unknown error occurred";
+        const errorDetail =
+          output.rawStopReason === "MALFORMED_FUNCTION_CALL"
+            ? "Gemini returned MALFORMED_FUNCTION_CALL (invalid tool-call JSON). Retry the turn; if it keeps happening, switch models."
+            : output.rawStopReason
+              ? `Provider stopped with: ${output.rawStopReason}`
+              : "An unknown error occurred";
         output.errorMessage = output.errorMessage || errorDetail;
         setLastError(output.errorMessage);
         stream.push({ type: "error", reason: output.stopReason, error: output });

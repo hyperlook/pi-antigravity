@@ -8,6 +8,10 @@ All notable changes to this project are documented in this file.
 
 - **Dynamic model discovery:** The selectable catalog is refreshed from authenticated `fetchAvailableModels` and grouped into public Pi IDs, so newly enabled models can appear without a catalog-only release. Last-known-good cache plus a conservative static seed remain for cold start. Discovery does not add a new cross-generation fallback; existing Gemini rollout remaps are unchanged.
 
+### Fixed
+
+- **Pi 0.86 transcript context:** Read the system prompt and tool declarations from transcript system messages (`getCurrentSystemPrompt` / `getCurrentTools`) instead of the removed `context.systemPrompt` / `context.tools` fields. Pi 0.86+ otherwise sent Gemini requests with no tools, which surfaced as `MALFORMED_FUNCTION_CALL`.
+
 ## [0.7.1] - 2026-09-03
 
 ### Added

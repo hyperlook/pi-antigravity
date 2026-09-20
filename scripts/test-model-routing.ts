@@ -1774,6 +1774,34 @@ assert.deepEqual(stringNoneReq.request.toolConfig, {
   functionCallingConfig: { mode: GeminiToolCallingMode.None },
 });
 
+// Pi 0.86+ TranscriptContext: prompt + tools live on system messages, not context.tools.
+const transcriptToolsContext = {
+  messages: [
+    {
+      role: "system",
+      content: "You are Pi. Follow AGENTS.md.",
+      toolsAdded: dummyToolsContext.tools,
+      timestamp: Date.now(),
+    },
+    { role: "user", content: "hi", timestamp: Date.now() },
+  ],
+} as Context;
+const fromTranscript = buildRequest(
+  flash37Model,
+  transcriptToolsContext,
+  "test-proj",
+  {},
+  "gemini-3.7-flash-high",
+);
+assert.ok(fromTranscript.request.tools);
+assert.equal(
+  fromTranscript.request.systemInstruction.parts[0]?.text,
+  "You are Pi. Follow AGENTS.md.",
+);
+assert.equal(fromTranscript.request.contents[0]?.role, "user");
+assert.equal(fromTranscript.request.contents[0]?.parts[0]?.text, "hi");
+assert.equal(fromTranscript.request.tools?.[0]?.functionDeclarations[0]?.name, "read_file");
+
 console.log(
   `model routing: ${routeCases.length} cases, tool schema, errors, project ids, token clamping, and message conversion passed`,
 );

@@ -60,7 +60,9 @@ const sessionTrajectoryMap = new Map<string, { conversationId: string; trajector
 export function resolveSessionTrajectory(context?: {
   messages?: Array<{ role?: string; timestamp?: number; content?: unknown }>;
 }): { conversationId: string; trajectoryId: string } {
-  const firstMsg = context?.messages?.[0];
+  const firstMsg =
+    context?.messages?.find((message) => message.role && message.role !== "system") ??
+    context?.messages?.[0];
   if (!firstMsg) {
     return { conversationId: crypto.randomUUID(), trajectoryId: crypto.randomUUID() };
   }

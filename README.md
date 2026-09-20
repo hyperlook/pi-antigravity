@@ -27,7 +27,7 @@ Want to equip Pi with MCP, web access, subagents, and todos? Install [`pi-essent
 
 ## Requirements
 
-- Pi Coding Agent and Pi AI version **0.80.0 or later**
+- Pi Coding Agent and Pi AI version **0.86.0 or later**
 - A Google account that can use the relevant Cloud Code Assist / Antigravity services
 - A browser to complete the Google sign-in. Same-machine is best (the browser hits the local callback automatically); on a remote/headless machine, complete sign-in anywhere and paste the resulting callback URL back into Pi (see [Troubleshooting](#troubleshooting)).
 
