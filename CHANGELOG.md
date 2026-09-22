@@ -6,6 +6,7 @@ All notable changes to this project are documented in this file.
 
 ### Added
 
+- **Pi 0.87 compatibility & image input limits:** Configured per-model image input limits (`inputLimits.images.resize`) for Gemini and Claude models, enabling Pi 0.87's cache-safe image preprocessing and automatic tool-result image resizing.
 - **Dynamic model discovery:** The selectable catalog is refreshed from authenticated `fetchAvailableModels` and grouped into public Pi IDs, so newly enabled models can appear without a catalog-only release. Last-known-good cache plus a conservative static seed remain for cold start. Discovery does not add a new cross-generation fallback; existing Gemini rollout remaps are unchanged.
 
 ### Fixed

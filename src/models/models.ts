@@ -171,6 +171,32 @@ const claudeSonnetCost = { input: 3.0, output: 15.0, cacheRead: 0.3, cacheWrite:
 const claudeOpusCost = { input: 15.0, output: 75.0, cacheRead: 1.5, cacheWrite: 18.75 };
 const gptOssCost = { input: 0.6, output: 2.4, cacheRead: 0.15, cacheWrite: 0.6 };
 
+const geminiInputLimits: ProviderModelConfig["inputLimits"] = {
+  maxRequestBytes: 20971520,
+  images: {
+    maxPerRequest: 3600,
+    resize: {
+      maxWidth: 2000,
+      maxHeight: 2000,
+      maxBytes: 4718592,
+      jpegQuality: 80,
+    },
+  },
+};
+
+const claudeInputLimits: ProviderModelConfig["inputLimits"] = {
+  maxRequestBytes: 33554432,
+  images: {
+    maxPerRequest: 600,
+    resize: {
+      maxWidth: 2000,
+      maxHeight: 2000,
+      maxBytes: 4718592,
+      jpegQuality: 80,
+    },
+  },
+};
+
 // A null entry is intentionally hidden by Pi. Do not collapse levels that happen to
 // route to the same runtime ID: the UI must reflect the levels the backend advertises.
 const thinkingLevelMaps = {
@@ -220,6 +246,7 @@ export const ANTIGRAVITY_MODELS: ProviderModelConfig[] = [
     reasoning: true,
     thinkingLevelMap: thinkingLevelMaps.lowMediumHigh,
     input: ["text", "image"],
+    inputLimits: geminiInputLimits,
     cost: geminiFlashCost,
     contextWindow: 1048576,
     maxTokens: 65536,
@@ -230,6 +257,7 @@ export const ANTIGRAVITY_MODELS: ProviderModelConfig[] = [
     reasoning: true,
     thinkingLevelMap: thinkingLevelMaps.lowMediumHigh,
     input: ["text", "image"],
+    inputLimits: geminiInputLimits,
     cost: geminiFlashCost,
     contextWindow: 1048576,
     maxTokens: 65536,
@@ -240,6 +268,7 @@ export const ANTIGRAVITY_MODELS: ProviderModelConfig[] = [
     reasoning: true,
     thinkingLevelMap: thinkingLevelMaps.lowMediumHigh,
     input: ["text", "image"],
+    inputLimits: geminiInputLimits,
     cost: geminiFlashCost,
     contextWindow: 1048576,
     maxTokens: 65536,
@@ -250,6 +279,7 @@ export const ANTIGRAVITY_MODELS: ProviderModelConfig[] = [
     reasoning: true,
     thinkingLevelMap: thinkingLevelMaps.thinking,
     input: ["text", "image"],
+    inputLimits: claudeInputLimits,
     cost: claudeOpusCost,
     contextWindow: 250000,
     maxTokens: 64000,
@@ -260,6 +290,7 @@ export const ANTIGRAVITY_MODELS: ProviderModelConfig[] = [
     reasoning: true,
     thinkingLevelMap: thinkingLevelMaps.thinking,
     input: ["text", "image"],
+    inputLimits: claudeInputLimits,
     cost: claudeSonnetCost,
     contextWindow: 200000,
     maxTokens: 64000,
@@ -270,6 +301,7 @@ export const ANTIGRAVITY_MODELS: ProviderModelConfig[] = [
     reasoning: true,
     thinkingLevelMap: thinkingLevelMaps.lowHigh,
     input: ["text", "image"],
+    inputLimits: geminiInputLimits,
     cost: geminiProCost,
     contextWindow: 1048576,
     maxTokens: 65535,
@@ -280,6 +312,7 @@ export const ANTIGRAVITY_MODELS: ProviderModelConfig[] = [
     reasoning: true,
     thinkingLevelMap: thinkingLevelMaps.lowMediumHigh,
     input: ["text", "image"],
+    inputLimits: geminiInputLimits,
     cost: geminiFlashCost,
     contextWindow: 1048576,
     maxTokens: 65536,

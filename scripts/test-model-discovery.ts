@@ -39,7 +39,17 @@ const catalog = buildAntigravityCatalog(
   },
   fallback,
 );
-assert(catalog.models.some((model) => model.id === "gemini-3.9-flash"), "discovers new model families");
+const gemini39 = catalog.models.find((model) => model.id === "gemini-3.9-flash");
+assert(Boolean(gemini39), "discovers new model families");
+assert(
+  gemini39?.inputLimits?.images?.resize?.maxWidth === 2000,
+  "synthesized model inherits inputLimits from template",
+);
+const fallbackGemini = fallback.models.find((model) => model.id === "gemini-3.8-flash");
+assert(
+  fallbackGemini?.inputLimits?.images?.resize?.maxBytes === 4718592,
+  "static catalog provides image input limits",
+);
 assert(!catalog.models.some((model) => model.id === "chat_hidden"), "filters hidden models");
 assert(!catalog.models.some((model) => model.id === "gemini-3-pro-image"), "filters image models");
 assert(

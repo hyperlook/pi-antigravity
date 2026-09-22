@@ -239,6 +239,7 @@ function synthesizeModel(
       reasoning,
       thinkingLevelMap: reasoning ? thinkingLevelMapFromLevels(advertisedLevels) : undefined,
       input: supportsImages ? ["text", "image"] : ["text"],
+      ...(supportsImages && template?.inputLimits ? { inputLimits: template.inputLimits } : {}),
       cost: template?.cost ?? ZERO_COST,
       contextWindow: template?.contextWindow ?? 128000,
       maxTokens: template?.maxTokens ?? 8192,
