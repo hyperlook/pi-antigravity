@@ -19,6 +19,12 @@ import {
   refreshAntigravityModels,
   resolvedCatalog,
 } from "./models/index.js";
+import {
+  executeUrlContext,
+  executeWebSearch,
+  UrlContextSchema,
+  WebSearchSchema,
+} from "./search/index.js";
 import { ANTIGRAVITY_API, streamAntigravity } from "./stream/index.js";
 import {
   fetchAccountUsage,
@@ -176,7 +182,7 @@ export default function (pi: ExtensionAPI): void {
         `lastError=${d.error ? redactSecrets(d.error) : "none"}`,
         "transport=native-streamSimple",
         "runtimeCli=not-used",
-        "commands=/antigravity.usage /antigravity.models /antigravity.refresh /antigravity.doctor /antigravity.image",
+        "commands=/antigravity.usage /antigravity.models /antigravity.refresh /antigravity.doctor /antigravity.image /antigravity.search",
       ];
       emitCommandOutput(ctx, `Antigravity doctor\n${lines.join("\n")}`);
     },
@@ -218,6 +224,39 @@ export default function (pi: ExtensionAPI): void {
       } catch (error) {
         const msg = error instanceof Error ? error.message : String(error);
         emitCommandOutput(ctx, `Antigravity image failed: ${redactSecrets(msg)}`, "warning");
+      }
+    },
+  });
+
+  pi.registerCommand("antigravity.search", {
+    description:
+      "Search the web via Antigravity Google Search (usage: /antigravity.search <query>)",
+    handler: async (args, ctx) => {
+      const query = (args || "").trim();
+      if (!query) {
+        emitCommandOutput(ctx, "Usage: /antigravity.search <query>", "warning");
+        return;
+      }
+      try {
+        const apiKey = await resolveApiKeyFromContext(ctx);
+        if (!apiKey) {
+          emitCommandOutput(
+            ctx,
+            "No Antigravity credentials. Run /login antigravity first.",
+            "warning",
+          );
+          return;
+        }
+        if (ctx.hasUI) ctx.ui.notify(`Searching Google for "${query}"…`, "info");
+        const result = await executeWebSearch({
+          apiKey,
+          query,
+        });
+        const summary = result.content[0]?.text || "No results found.";
+        emitCommandOutput(ctx, summary);
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        emitCommandOutput(ctx, `Antigravity search failed: ${redactSecrets(msg)}`, "warning");
       }
     },
   });
@@ -275,6 +314,56 @@ export default function (pi: ExtensionAPI): void {
         ],
         details: { model: result.model, savedPaths: result.savedPaths },
       };
+    },
+  });
+
+  pi.registerTool({
+    name: "web_search",
+    label: "Web Search",
+    description:
+      "Search the web using Google Search via Antigravity for current information, news, and answers. Optionally include URLs to analyze alongside search results.",
+    promptSnippet: "Search the web via Google Search (Antigravity)",
+    promptGuidelines: [
+      "Use web_search to find current information, recent events, news, documentation, or answers on the web.",
+    ],
+    parameters: WebSearchSchema,
+    async execute(_toolCallId, params, signal, onUpdate, ctx) {
+      const apiKey = await ctx.modelRegistry.getApiKeyForProvider("antigravity");
+      if (!apiKey) {
+        throw new Error("No Antigravity credentials. Run /login antigravity first.");
+      }
+      return executeWebSearch({
+        apiKey,
+        query: params.query,
+        urls: params.urls,
+        signal,
+        onUpdate,
+      });
+    },
+  });
+
+  pi.registerTool({
+    name: "url_context",
+    label: "URL Context",
+    description:
+      "Directly analyze, extract, and summarize content from up to 20 public URLs (articles, documentation, web pages, and YouTube videos) via Antigravity.",
+    promptSnippet: "Extract and summarize web pages or YouTube videos via Antigravity",
+    promptGuidelines: [
+      "Use url_context to read, analyze, and extract content from specific URLs or YouTube videos.",
+    ],
+    parameters: UrlContextSchema,
+    async execute(_toolCallId, params, signal, onUpdate, ctx) {
+      const apiKey = await ctx.modelRegistry.getApiKeyForProvider("antigravity");
+      if (!apiKey) {
+        throw new Error("No Antigravity credentials. Run /login antigravity first.");
+      }
+      return executeUrlContext({
+        apiKey,
+        urls: params.urls,
+        query: params.query,
+        signal,
+        onUpdate,
+      });
     },
   });
 }

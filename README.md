@@ -95,10 +95,19 @@ Review these permissions before approving access. If your credentials expire or 
 | `/antigravity.refresh` | Force refresh the dynamic model catalog from Antigravity. |
 | `/antigravity.doctor` | Show sanitized provider diagnostics, including the endpoint, status, and resolved runtime model. |
 | `/antigravity.image <prompt>` | Generate an image via Antigravity and save it under `.pi/generated-images/`. Optional `--ratio 16:9`, `--model`, `--path`. |
+| `/antigravity.search <query>` | Search the web using Google Search via Antigravity and display a cited summary. |
 
 Model availability, entitlement, quota groups, and resets are returned by the service and can differ by account. The quota percentage shown for a model can represent a shared pool, not a private per-model allowance.
 
-The extension also registers a `generate_image` tool the model can call. Images are written inside the project directory (default `.pi/generated-images/`). Image models such as `gemini-3-pro-image` are account-dependent; `/antigravity.image` falls back to other advertised Gemini image IDs on 404.
+### Built-in Agent Tools
+
+The extension registers three built-in tools for Pi agents out of the box with **zero configuration**:
+
+- **`generate_image`**: Generates images via Gemini image models and saves them inside the project directory (default `.pi/generated-images/`).
+- **`web_search`**: Provider-native Google web search with Grounding. Injects byte-safe citations (`[1]`, `[2]`), automatically resolves Google redirect tracking links into canonical URLs, and lists verified sources.
+- **`url_context`**: Reads and summarizes public URLs. Features native YouTube multimodal understanding (Gemini processes video streams directly) alongside standard web page extraction.
+
+All search and analysis requests use Antigravity's fast, high-quota `gemini-3.7-flash` tier by default without consuming separate API keys.
 
 ## Models and routing
 
@@ -151,6 +160,7 @@ All primary environment variables start with `ANTIGRAVITY_`. The legacy `NOAGY_`
 | `ANTIGRAVITY_CALLBACK_HOST` | Bind OAuth callback to `127.0.0.1`, `::1`, or `localhost` only. Defaults to `127.0.0.1`. |
 | `ANTIGRAVITY_USER_AGENT` | Override the request user-agent. |
 | `ANTIGRAVITY_RUNTIME_MODEL` | Pin requests to a runtime model ID, bypassing discovered/fallback routing. |
+| `ANTIGRAVITY_SEARCH_MODEL` | Override the search model ID (defaults to `gemini-3.7-flash-tiered`). |
 | `ANTIGRAVITY_CATALOG_REFRESH_INTERVAL_MS` | Override catalog refresh TTL in ms. Defaults to 4 hours (`14400000`). Set to `0` to always refresh. |
 | `ANTIGRAVITY_CLIENT_ID` | Use a custom Google OAuth client ID. |
 | `ANTIGRAVITY_CLIENT_SECRET` | Use a custom Google OAuth client secret. Keep it out of source control and shell history. |
