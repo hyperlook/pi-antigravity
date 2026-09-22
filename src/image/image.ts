@@ -6,7 +6,6 @@ import {
   jsonOrTextError,
   parseApiKey,
 } from "../client/client.js";
-import { AntigravityRequestType, AntigravityUserAgent, GeminiRole } from "../types/enums.js";
 import { antigravityFetch } from "../utils/http.js";
 import { safeError } from "../utils/security.js";
 import { antigravityRequestEnvelope, sanitizeText } from "../utils/util.js";
@@ -42,15 +41,15 @@ export type ImageGenerateRequest = {
   project: string;
   model: string;
   request: {
-    contents: Array<{ role: GeminiRole.User; parts: Array<{ text: string }> }>;
-    systemInstruction: { role: GeminiRole.User; parts: Array<{ text: string }> };
+    contents: Array<{ role: "user"; parts: Array<{ text: string }> }>;
+    systemInstruction: { role: "user"; parts: Array<{ text: string }> };
     generationConfig: {
       imageConfig: { aspectRatio: string };
       candidateCount: number;
     };
   };
-  requestType: AntigravityRequestType.Agent;
-  userAgent: AntigravityUserAgent.Antigravity;
+  requestType: "agent";
+  userAgent: "antigravity";
   requestId: string;
 };
 
@@ -183,9 +182,9 @@ export function buildImageGenerateRequest(
     project: projectId,
     model,
     request: {
-      contents: [{ role: GeminiRole.User, parts: [{ text: sanitizeText(prompt) }] }],
+      contents: [{ role: "user", parts: [{ text: sanitizeText(prompt) }] }],
       systemInstruction: {
-        role: GeminiRole.User,
+        role: "user",
         parts: [{ text: IMAGE_SYSTEM_INSTRUCTION }],
       },
       generationConfig: {
@@ -193,8 +192,8 @@ export function buildImageGenerateRequest(
         candidateCount: 1,
       },
     },
-    requestType: AntigravityRequestType.Agent,
-    userAgent: AntigravityUserAgent.Antigravity,
+    requestType: "agent",
+    userAgent: "antigravity",
     requestId: envelope.requestId,
   };
 }
