@@ -76,7 +76,8 @@ import {
   resolveSessionTrajectory,
   sanitizeText,
 } from "../utils/util.js";
-import { antigravityFetch } from "../utils/http.js";
+import { antigravityFetch, prewarmConnection } from "../utils/http.js";
+import { failoverToNextAccount } from "../auth/accounts.js";
 
 export { ANTIGRAVITY_API };
 
@@ -210,9 +211,98 @@ function hasLegacyContextFields(context: Context | TranscriptContext): context i
 
 /** Pi 0.86+ passes TranscriptContext; tests may still construct a raw Context. */
 function toTranscript(context: Context | TranscriptContext): TranscriptContext {
-  return collapseSystemMessages(
-    hasLegacyContextFields(context) ? normalizeContext(context) : context,
-  );
+  const normalized = hasLegacyContextFields(context) ? normalizeContext(context) : context;
+  const safeMessages = (normalized.messages ?? []).map((m) => {
+    if (m.role === "system" && m.content === undefined) {
+      return { ...m, content: "" };
+    }
+    return m;
+  });
+  try {
+    return collapseSystemMessages({ ...normalized, messages: safeMessages });
+  } catch {
+    return { ...normalized, messages: safeMessages };
+  }
+}
+
+interface SystemMessageLike {
+  role?: string;
+  content?: string | Array<{ type?: string; text?: string }>;
+  sections?: Record<string, unknown>;
+  toolsAdded?: Tool[];
+  toolsRemoved?: Array<{ name: string }>;
+  tools?: Tool[];
+}
+
+function asSystemMessages(messages: Context["messages"] | undefined): SystemMessageLike[] {
+  return [...(messages ?? [])] as SystemMessageLike[];
+}
+
+function extractTranscriptSystemPrompt(messages: readonly SystemMessageLike[]): string {
+  const parts: string[] = [];
+  for (const message of messages) {
+    if (message?.role !== "system") continue;
+    if (message.sections && typeof message.sections === "object") {
+      const sectionParts = Object.values(message.sections).filter(
+        (value): value is string => typeof value === "string" && value.trim().length > 0,
+      );
+      if (sectionParts.length > 0) {
+        parts.push(sectionParts.join("\n\n"));
+        continue;
+      }
+    }
+    if (typeof message.content === "string" && message.content.trim()) {
+      parts.push(message.content);
+    } else if (Array.isArray(message.content)) {
+      const texts = message.content
+        .map((block) => (typeof block === "string" ? block : block?.text || ""))
+        .filter((text) => text.trim().length > 0);
+      if (texts.length > 0) parts.push(texts.join("\n\n"));
+    }
+  }
+  return parts.join("\n\n");
+}
+
+function extractTranscriptTools(messages: readonly SystemMessageLike[]): Tool[] {
+  const tools = new Map<string, Tool>();
+  for (const message of messages) {
+    if (message?.role !== "system") continue;
+    for (const tool of message.toolsRemoved ?? []) {
+      tools.delete(tool.name);
+    }
+    for (const tool of [...(message.toolsAdded ?? []), ...(message.tools ?? [])]) {
+      if (tool && typeof tool.name === "string") tools.set(tool.name, tool);
+    }
+  }
+  return [...tools.values()];
+}
+
+export function resolveCurrentSystemPrompt(
+  context: Context | TranscriptContext,
+): string | undefined {
+  try {
+    const transcript = toTranscript(context);
+    const fromHelper = getCurrentSystemPrompt(transcript.messages);
+    if (fromHelper?.trim()) return fromHelper;
+  } catch {
+    // Fall through to local replay / legacy fields when helpers fail on non-standard shapes.
+  }
+  const fromTranscript = extractTranscriptSystemPrompt(asSystemMessages(context.messages));
+  if (fromTranscript.trim()) return fromTranscript;
+  return "systemPrompt" in context ? context.systemPrompt : undefined;
+}
+
+export function resolveCurrentTools(context: Context | TranscriptContext): Tool[] | undefined {
+  try {
+    const transcript = toTranscript(context);
+    const fromHelper = getCurrentTools(transcript.messages);
+    if (fromHelper.length > 0) return fromHelper;
+  } catch {
+    // Fall through to local replay / legacy fields.
+  }
+  const fromTranscript = extractTranscriptTools(asSystemMessages(context.messages));
+  if (fromTranscript.length > 0) return fromTranscript;
+  return "tools" in context ? context.tools : undefined;
 }
 
 /** Exported for unit tests. */
@@ -800,8 +890,8 @@ export function buildRequest(
   runtimeModel: string,
 ): AntigravityGenerateRequest {
   const transcript = toTranscript(context);
-  const systemPrompt = getCurrentSystemPrompt(transcript.messages);
-  const currentTools = getCurrentTools(transcript.messages);
+  const systemPrompt = resolveCurrentSystemPrompt(transcript);
+  const currentTools = resolveCurrentTools(transcript);
   const injectedSkills = transcript.messages.flatMap((msg) =>
     msg.role === "user" ? skillBlocks(msg.content) : [],
   );
@@ -1348,10 +1438,13 @@ export function streamAntigravity(
     const startTime = Date.now();
     const output = createOutput(model);
     try {
-      const creds = parseApiKey(opts.apiKey);
+      let creds = parseApiKey(opts.apiKey);
+      const triedAccessTokens = new Set<string>([creds.token]);
+      const primaryEndpoint = endpointCandidates()[0];
+      if (primaryEndpoint) prewarmConnection(primaryEndpoint);
       // Skip loadCodeAssist roundtrip when credentials already carry a projectId.
       const warmedProject = creds.projectId ? null : await loadCodeAssist(creds.token);
-      const projectId = resolveProjectId({
+      let projectId = resolveProjectId({
         token: creds.token,
         warmedProject,
         credentialProjectId: creds.projectId,
@@ -1379,7 +1472,7 @@ export function streamAntigravity(
         runtimeCandidates.push(fallback);
       }
 
-      const requestHeaders = antigravityHeaders(creds.token);
+      let requestHeaders = antigravityHeaders(creds.token);
 
       let response: Response | undefined;
       let lastText = "";
@@ -1487,6 +1580,21 @@ export function streamAntigravity(
           }
           const friendly = friendlyAntigravityError(response?.status, lastText);
           if (response?.status === 429 && /Quota reached\./i.test(friendly)) {
+            const next = await failoverToNextAccount(triedAccessTokens);
+            if (next) {
+              triedAccessTokens.add(next.token);
+              creds = next;
+              requestHeaders = antigravityHeaders(creds.token);
+              const switchedProject = creds.projectId ? null : await loadCodeAssist(creds.token);
+              projectId = resolveProjectId({
+                token: creds.token,
+                warmedProject: switchedProject,
+                credentialProjectId: creds.projectId,
+              });
+              setLastProjectId(projectId);
+              emptyAttempt = -1;
+              continue;
+            }
             throw new Error(friendly);
           }
           throw new Error(
