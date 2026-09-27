@@ -5,7 +5,7 @@ import { join } from "node:path";
 import type { OAuthCredentials } from "@earendil-works/pi-ai";
 import { defaultProjectId } from "../client/client.js";
 import type { AntigravityApiKey, AntigravityOAuthCredentials } from "../types/types.js";
-import { refreshAntigravityToken } from "./oauth.js";
+import { getApiKey, refreshAntigravityToken } from "./oauth.js";
 
 const ACCOUNTS_FILE = "antigravity-accounts.json";
 const AUTH_FILE = "auth.json";
@@ -28,6 +28,15 @@ export type AccountSummary = {
   email?: string;
   active: boolean;
   lastUsedAt: number;
+};
+
+/** Credential material for a quota read. Does not imply the account is active. */
+export type AccountAccess = {
+  accountId: string;
+  email?: string;
+  active: boolean;
+  apiKey?: string;
+  error?: string;
 };
 
 function agentDir(): string {
@@ -258,6 +267,59 @@ function apiKeyFor(account: StoredAccount): AntigravityApiKey {
     token: account.access,
     projectId: account.projectId || defaultProjectId(email || "antigravity-default"),
   };
+}
+
+/**
+ * Refresh stored accounts enough to read quota, without changing the active account.
+ * A rotated refresh token is persisted; `lastUsedAt` and `auth.json` stay put unless the
+ * already-active access token itself had to be refreshed.
+ */
+export async function readAccountApiKeys(): Promise<AccountAccess[]> {
+  syncCurrentAuth();
+  const store = loadAccountStore();
+  const activeId = store.activeAccountId;
+  const activeBefore = activeId ? store.accounts[activeId] : undefined;
+  let dirty = false;
+  const rows: AccountAccess[] = [];
+
+  for (const existing of sortedAccounts(store)) {
+    const active = existing.accountId === activeId;
+    try {
+      const fresh = await ensureFresh(existing);
+      const account = fresh === existing ? existing : { ...fresh, lastUsedAt: existing.lastUsedAt };
+      if (account !== existing) {
+        store.accounts[account.accountId] = account;
+        dirty = true;
+      }
+      rows.push({
+        accountId: account.accountId,
+        email: account.email,
+        active,
+        apiKey: getApiKey(account),
+      });
+    } catch (error) {
+      rows.push({
+        accountId: existing.accountId,
+        email: existing.email,
+        active,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  if (dirty) saveAccountStore(store);
+  const activeAfter = activeId ? store.accounts[activeId] : undefined;
+  if (
+    activeBefore &&
+    activeAfter &&
+    (activeBefore.access !== activeAfter.access ||
+      activeBefore.refresh !== activeAfter.refresh ||
+      activeBefore.expires !== activeAfter.expires ||
+      activeBefore.projectId !== activeAfter.projectId)
+  ) {
+    writeActiveCredential(activeAfter);
+  }
+  return rows;
 }
 
 export async function activateAccount(selector: string): Promise<StoredAccount> {

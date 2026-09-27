@@ -53,13 +53,15 @@ pi update git:github.com/hyperlook/pi-antigravity
 4. Start working. If a request fails, run `/antigravity.doctor` for sanitized diagnostics.
 
 To link another account without losing the existing one, run `/login antigravity`
-again and complete Google sign-in with the other account. Manage linked accounts with:
+again and complete Google sign-in with the other account. Compare quota and switch with:
 
 ```text
-/antigravity.accounts
-/antigravity.accounts switch <index|email>
-/antigravity.accounts remove <index|email>
+/antigravity.usage
+/antigravity.usage <index|email>
+/antigravity.usage remove <index|email>
 ```
+
+With no arguments, `/antigravity.usage` shows every linked account's quota. When a UI is available it then opens a selector so you can switch without a `switch` subcommand. Reading quota does not change the active account until you pick one. `/antigravity.usage current` skips the comparison and shows only the active account.
 
 On a hard quota wall (HTTP 429 with a reset hint), the provider automatically tries the next linked account.
 
@@ -94,9 +96,8 @@ Review these permissions before approving access. If your credentials expire or 
 | --- | --- |
 | `/login antigravity` | Sign in to Google and configure the provider. |
 | `/model antigravity/<model-id>` | Choose a registered Antigravity model. |
-| `/antigravity.usage` | Show the server-reported shared quota groups and reset times. |
+| `/antigravity.usage` | Compare linked accounts' quota, then select one to switch. `current` shows only the active account. `<index|email>` switches directly. `remove <index|email>` unlinks an account. |
 | `/antigravity.models` | List available runtime models, remaining shared-pool quota, and capabilities. |
-| `/antigravity.accounts` | List linked accounts; use `switch` or `remove` with an index or email to manage them. |
 | `/antigravity.models all` | Include tab/chat models normally hidden from the model list. |
 | `/antigravity.refresh` | Force refresh the dynamic model catalog from Antigravity. |
 | `/antigravity.doctor` | Show sanitized provider diagnostics, including the endpoint, status, and resolved runtime model. |

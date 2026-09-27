@@ -9,6 +9,10 @@ All notable changes to this project are documented in this file.
 - **Pi 0.87 compatibility & image input limits:** Configured per-model image input limits (`inputLimits.images.resize`) for Gemini and Claude models, enabling Pi 0.87's cache-safe image preprocessing and automatic tool-result image resizing.
 - **Dynamic model discovery:** The selectable catalog is refreshed from authenticated `fetchAvailableModels` and grouped into public Pi IDs, so newly enabled models can appear without a catalog-only release. Last-known-good cache plus a conservative static seed remain for cold start. Discovery does not add a new cross-generation fallback; existing Gemini rollout remaps are unchanged.
 
+### Changed
+
+- **Account usage command:** `/antigravity.usage` now lists every linked account's quota and, when a UI is available, lets you select one to switch. `current` keeps the active-account-only view. `<index|email>` switches without a `switch` subcommand. `remove <index|email>` unlinks an account. `/antigravity.accounts` is removed. Quota reads do not change the active account.
+
 ### Fixed
 
 - **Pi 0.86 transcript context:** Read the system prompt and tool declarations from transcript system messages (`getCurrentSystemPrompt` / `getCurrentTools`) instead of the removed `context.systemPrompt` / `context.tools` fields. Pi 0.86+ otherwise sent Gemini requests with no tools, which surfaced as `MALFORMED_FUNCTION_CALL`.

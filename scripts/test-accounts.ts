@@ -9,6 +9,7 @@ const {
   failoverToNextAccount,
   listAccounts,
   loadAccountStore,
+  readAccountApiKeys,
   rememberAccount,
   removeAccount,
   updateRememberedAccount,
@@ -48,6 +49,34 @@ async function testStoresAndSwitchesAccounts(): Promise<void> {
       .email === "a@example.com",
     "auth.json was not updated",
   );
+}
+
+async function testUsageReadDoesNotSwitch(): Promise<void> {
+  const beforeActive = listAccounts().find((entry) => entry.active)?.email;
+  const beforeUsed = listAccounts().find((entry) => entry.email === "b@example.com")?.lastUsedAt;
+  const authPath = join(process.env.PI_CODING_AGENT_DIR!, "auth.json");
+  const beforeAuth = JSON.parse(readFileSync(authPath, "utf8")).antigravity.email as string;
+  const rows = await readAccountApiKeys();
+  assert(beforeActive === "a@example.com", "fixture active account changed");
+  assert(
+    listAccounts().find((entry) => entry.active)?.email === beforeActive,
+    "usage read switched the active account",
+  );
+  assert(
+    JSON.parse(readFileSync(authPath, "utf8")).antigravity.email === beforeAuth,
+    "usage read rewrote auth.json",
+  );
+  assert(
+    listAccounts().find((entry) => entry.email === "b@example.com")?.lastUsedAt === beforeUsed,
+    "usage read bumped lastUsedAt",
+  );
+  assert(rows.length === listAccounts().length, "usage read dropped an account");
+  const parsed = JSON.parse(rows.find((row) => row.email === "b@example.com")?.apiKey || "{}") as {
+    token?: string;
+    projectId?: string;
+  };
+  assert(parsed.token === "access-b@example.com", "usage read returned the wrong token");
+  assert(parsed.projectId === "project-b@example.com", "usage read returned the wrong project");
 }
 
 function testKeepsRotatedRefreshTokens(): void {
@@ -120,6 +149,7 @@ async function testRemovesAccount(): Promise<void> {
 }
 
 await testStoresAndSwitchesAccounts();
+await testUsageReadDoesNotSwitch();
 testKeepsRotatedRefreshTokens();
 await testNumericSelectorIgnoresDigitEmails();
 await testPreservesOtherAuthProviders();

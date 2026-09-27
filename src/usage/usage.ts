@@ -296,6 +296,95 @@ function quotaErrorNote(msg: string): string {
   return `Aggregate quota summary unavailable: ${msg.slice(0, 160)}`;
 }
 
+export type UsageCommandArgs =
+  | { action: "compare" }
+  | { action: "current" }
+  | { action: "switch"; selector: string }
+  | { action: "remove"; selector: string }
+  | { action: "invalid"; message: string };
+
+const USAGE_HELP = "Usage: /antigravity.usage [current | <index|email> | remove <index|email>]";
+
+export function parseUsageCommand(args: string): UsageCommandArgs {
+  const tokens = args.trim().split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return { action: "compare" };
+  const [head, ...rest] = tokens;
+  const keyword = head.toLowerCase();
+  if (keyword === "current") {
+    return rest.length === 0 ? { action: "current" } : { action: "invalid", message: USAGE_HELP };
+  }
+  if (keyword === "remove") {
+    const selector = rest.join(" ").trim();
+    return selector
+      ? { action: "remove", selector }
+      : { action: "invalid", message: "Usage: /antigravity.usage remove <index|email>" };
+  }
+  if (rest.length > 0) return { action: "invalid", message: USAGE_HELP };
+  return { action: "switch", selector: head };
+}
+
+export type AccountUsageView = {
+  index: number;
+  accountId: string;
+  label: string;
+  active: boolean;
+  usage?: AccountUsage;
+  error?: string;
+};
+
+export function compactQuotaLabel(usage: AccountUsage): string {
+  const parts: string[] = [];
+  if (usage.planLabel) parts.push(usage.planLabel);
+  for (const group of usage.groups) {
+    for (const bucket of group.buckets) {
+      const rem = remainingPercent(bucket.remainingFraction);
+      parts.push(`${bucket.displayName} ${rem ?? "?"}%`);
+    }
+  }
+  if (parts.length === 0) return usage.quotaSummaryError ? "quota n/a" : "no quota groups";
+  const shown = parts.slice(0, 4);
+  return parts.length > 4 ? `${shown.join(" · ")} · …` : shown.join(" · ");
+}
+
+function oneLine(text: string, max = 80): string {
+  const flat = text.replace(/\s+/g, " ").trim();
+  return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
+}
+
+export function accountSwitchLabel(row: AccountUsageView): string {
+  const detail = row.error
+    ? oneLine(row.error)
+    : row.usage
+      ? compactQuotaLabel(row.usage)
+      : "no usage";
+  return `${row.active ? "* " : "  "}${row.index}. ${row.label} · ${detail}`;
+}
+
+function indentBlock(text: string, pad = "    "): string {
+  return text
+    .split("\n")
+    .map((line) => (line ? pad + line : line))
+    .join("\n");
+}
+
+export function formatAccountsUsage(rows: AccountUsageView[]): string {
+  const lines = ["Antigravity accounts"];
+  for (const row of rows) {
+    if (lines.length > 1) lines.push("");
+    lines.push(`${row.active ? "*" : " "} ${row.index}. ${row.label}`);
+    if (row.error) {
+      lines.push(`    ${oneLine(row.error, 200)}`);
+      continue;
+    }
+    if (!row.usage) {
+      lines.push("    No usage.");
+      continue;
+    }
+    lines.push(indentBlock(formatUsageSummary(row.usage)));
+  }
+  return lines.join("\n");
+}
+
 export function formatUsageSummary(usage: AccountUsage): string {
   const lines: string[] = [];
 

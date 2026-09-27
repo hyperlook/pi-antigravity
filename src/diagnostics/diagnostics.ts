@@ -24,14 +24,20 @@ function currentBag(): DiagnosticsSnapshot {
   return storage.getStore() ?? lastSnapshot;
 }
 
-/** Run work with an isolated diagnostics bag; commits it to `lastSnapshot` when done. */
-export async function runWithDiagnostics<T>(fn: () => Promise<T>): Promise<T> {
+/**
+ * Run work with an isolated diagnostics bag.
+ * Parallel account reads pass `commit: false` so a sibling account cannot clobber `/antigravity.doctor`.
+ */
+export async function runWithDiagnostics<T>(
+  fn: () => Promise<T>,
+  opts?: { commit?: boolean },
+): Promise<T> {
   const bag: DiagnosticsSnapshot = {};
   return storage.run(bag, async () => {
     try {
       return await fn();
     } finally {
-      lastSnapshot = { ...bag };
+      if (opts?.commit !== false) lastSnapshot = { ...bag };
     }
   });
 }

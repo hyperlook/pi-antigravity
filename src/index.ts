@@ -6,6 +6,7 @@ import {
   getApiKey,
   listAccounts,
   loginAntigravity,
+  readAccountApiKeys,
   refreshAntigravityToken,
   rememberAccount,
   removeAccount,
@@ -36,10 +37,14 @@ import {
 } from "./search/index.js";
 import { ANTIGRAVITY_API, streamAntigravity } from "./stream/index.js";
 import {
+  accountSwitchLabel,
   fetchAccountUsage,
+  formatAccountsUsage,
   formatModelsList,
   formatUsageSummary,
+  parseUsageCommand,
   resolveApiKeyFromContext,
+  type AccountUsageView,
 } from "./usage/index.js";
 import { maskEmail, redactSecrets } from "./utils/index.js";
 
@@ -79,9 +84,10 @@ async function refreshAndRemember(
 async function withUsage(
   ctx: ExtensionCommandContext,
   fn: (usage: Awaited<ReturnType<typeof fetchAccountUsage>>) => string,
+  apiKeyOverride?: string,
 ): Promise<void> {
   try {
-    const apiKey = await resolveApiKeyFromContext(ctx);
+    const apiKey = apiKeyOverride ?? (await resolveApiKeyFromContext(ctx));
     if (!apiKey) {
       emitCommandOutput(
         ctx,
@@ -95,7 +101,157 @@ async function withUsage(
     emitCommandOutput(ctx, fn(usage));
   } catch (error) {
     const msg = error instanceof Error ? error.message : String(error);
-    emitCommandOutput(ctx, `Antigravity usage failed: ${msg}`, "warning");
+    emitCommandOutput(ctx, `Antigravity usage failed: ${redactSecrets(msg)}`, "warning");
+  }
+}
+
+function usageArgumentCompletions(prefix: string) {
+  const accounts = listAccounts().map((account, index) => {
+    const selector = account.email || String(index + 1);
+    return {
+      selector,
+      label: `${account.active ? "* " : ""}${index + 1}. ${account.email || account.accountId}`,
+    };
+  });
+  const text = prefix.trimStart();
+  const removeMatch = /^remove\s+(.*)$/i.exec(text);
+  if (removeMatch) {
+    const rest = removeMatch[1].trim().toLowerCase();
+    return accounts
+      .filter(
+        (account) =>
+          account.selector.toLowerCase().includes(rest) ||
+          account.label.toLowerCase().includes(rest),
+      )
+      .map((account) => ({
+        value: `remove ${account.selector}`,
+        label: account.label,
+        description: "Unlink this account",
+      }));
+  }
+  const needle = text.toLowerCase();
+  return [
+    { value: "current", label: "current", description: "Active account only, no switch" },
+    { value: "remove", label: "remove", description: "Unlink an account" },
+    ...accounts.map((account) => ({
+      value: account.selector,
+      label: account.label,
+      description: "Switch to this account",
+    })),
+  ].filter(
+    (item) =>
+      item.value.toLowerCase().startsWith(needle) ||
+      item.label.toLowerCase().includes(needle) ||
+      item.description.toLowerCase().includes(needle),
+  );
+}
+
+async function removeLinkedAccount(ctx: ExtensionCommandContext, selector: string): Promise<void> {
+  if (ctx.hasUI) {
+    const ok = await ctx.ui.confirm(
+      "Remove Antigravity account",
+      `Unlink ${selector}? This does not revoke the Google token.`,
+    );
+    if (!ok) {
+      emitCommandOutput(ctx, "Account removal cancelled.");
+      return;
+    }
+  }
+  const remaining = await removeAccount(selector);
+  const next = remaining ? ` Active account is now ${remaining.email || remaining.accountId}.` : "";
+  emitCommandOutput(ctx, `Antigravity account removed.${next}`);
+}
+
+async function switchAndShowUsage(ctx: ExtensionCommandContext, selector: string): Promise<void> {
+  const account = await activateAccount(selector);
+  const label = account.email || account.accountId;
+  await withUsage(
+    ctx,
+    (usage) => `Active Antigravity account: ${label}\n\n${formatUsageSummary(usage)}`,
+    getApiKey(account),
+  );
+}
+
+async function compareAndMaybeSwitch(ctx: ExtensionCommandContext): Promise<void> {
+  const access = await readAccountApiKeys();
+  if (access.length === 0) {
+    emitCommandOutput(
+      ctx,
+      "No linked Antigravity accounts. Run /login antigravity to add one.",
+      "warning",
+    );
+    return;
+  }
+  if (ctx.hasUI) {
+    ctx.ui.notify(
+      `Fetching usage for ${access.length} account${access.length === 1 ? "" : "s"}…`,
+      "info",
+    );
+  }
+
+  const rows: AccountUsageView[] = await Promise.all(
+    access.map(async (account, index) => {
+      const view: AccountUsageView = {
+        index: index + 1,
+        accountId: account.accountId,
+        label: account.email || account.accountId,
+        active: account.active,
+      };
+      if (!account.apiKey) {
+        return { ...view, error: redactSecrets(account.error || "No credentials") };
+      }
+      try {
+        const usage = await runWithDiagnostics(() => fetchAccountUsage(account.apiKey), {
+          commit: account.active,
+        });
+        return { ...view, usage };
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        return { ...view, error: redactSecrets(msg) };
+      }
+    }),
+  );
+
+  const hint = ctx.hasUI
+    ? "Remove: /antigravity.usage remove <index|email>"
+    : "Switch: /antigravity.usage <index|email>\nRemove: /antigravity.usage remove <index|email>\nActive only: /antigravity.usage current";
+  emitCommandOutput(ctx, `${formatAccountsUsage(rows)}\n\n${hint}`);
+
+  if (!ctx.hasUI || rows.length < 2) return;
+  const choices = rows.map((row) => ({ row, label: accountSwitchLabel(row) }));
+  const selected = await ctx.ui.select(
+    "Switch Antigravity account",
+    choices.map((choice) => choice.label),
+  );
+  const chosen = choices.find((choice) => choice.label === selected)?.row;
+  if (!chosen || chosen.active) return;
+  const account = await activateAccount(String(chosen.index));
+  emitCommandOutput(ctx, `Switched to ${account.email || account.accountId}`);
+}
+
+async function handleUsageCommand(args: string, ctx: ExtensionCommandContext): Promise<void> {
+  const parsed = parseUsageCommand(args);
+  try {
+    if (parsed.action === "invalid") {
+      emitCommandOutput(ctx, parsed.message, "warning");
+      return;
+    }
+    if (parsed.action === "current") {
+      await withUsage(ctx, formatUsageSummary);
+      return;
+    }
+    if (parsed.action === "remove") {
+      await removeLinkedAccount(ctx, parsed.selector);
+      return;
+    }
+    if (parsed.action === "switch") {
+      await switchAndShowUsage(ctx, parsed.selector);
+      return;
+    }
+    await compareAndMaybeSwitch(ctx);
+  } catch (error) {
+    const msg = error instanceof Error ? error.message : String(error);
+    emitCommandOutput(ctx, redactSecrets(msg), "error");
   }
 }
 
@@ -124,10 +280,10 @@ export default function (pi: ExtensionAPI): void {
   });
 
   pi.registerCommand("antigravity.usage", {
-    description: "Show Antigravity shared quota pools (Gemini / Claude+GPT, 5h + weekly)",
-    handler: async (_args, ctx) => {
-      await withUsage(ctx, formatUsageSummary);
-    },
+    description:
+      "Compare linked account quota and switch (current | <index|email> | remove <index|email>)",
+    getArgumentCompletions: (prefix) => usageArgumentCompletions(prefix),
+    handler: handleUsageCommand,
   });
 
   pi.registerCommand("antigravity.models", {
@@ -185,51 +341,6 @@ export default function (pi: ExtensionAPI): void {
     },
   });
 
-  pi.registerCommand("antigravity.accounts", {
-    description: "List, switch, or remove linked Antigravity Google accounts",
-    handler: async (args, ctx) => {
-      const command = args.trim();
-      try {
-        if (command.startsWith("switch ")) {
-          const account = await activateAccount(command.slice("switch ".length));
-          emitCommandOutput(
-            ctx,
-            `Active Antigravity account: ${account.email || account.accountId}`,
-          );
-          return;
-        }
-        if (command.startsWith("remove ")) {
-          const remaining = await removeAccount(command.slice("remove ".length));
-          const next = remaining
-            ? ` Active account is now ${remaining.email || remaining.accountId}.`
-            : "";
-          emitCommandOutput(ctx, `Antigravity account removed.${next}`);
-          return;
-        }
-        const accounts = listAccounts();
-        if (accounts.length === 0) {
-          emitCommandOutput(
-            ctx,
-            "No linked Antigravity accounts. Run /login antigravity to add one.",
-            "warning",
-          );
-          return;
-        }
-        const lines = accounts.map(
-          (account, index) =>
-            `${account.active ? "* " : "  "}${index + 1}. ${account.email || account.accountId}`,
-        );
-        emitCommandOutput(
-          ctx,
-          `${lines.join("\n")}\nUse /antigravity.accounts switch <index|email> or /antigravity.accounts remove <index|email>.`,
-        );
-      } catch (error) {
-        const msg = error instanceof Error ? error.message : String(error);
-        emitCommandOutput(ctx, msg, "error");
-      }
-    },
-  });
-
   pi.registerCommand("antigravity.doctor", {
     description: "Show sanitized Antigravity provider diagnostics",
     handler: async (_args, ctx) => {
@@ -255,7 +366,7 @@ export default function (pi: ExtensionAPI): void {
         `lastError=${d.error ? redactSecrets(d.error) : "none"}`,
         "transport=native-streamSimple",
         "runtimeCli=not-used",
-        "commands=/antigravity.usage /antigravity.models /antigravity.accounts /antigravity.refresh /antigravity.doctor /antigravity.image /antigravity.search",
+        "commands=/antigravity.usage /antigravity.models /antigravity.refresh /antigravity.doctor /antigravity.image /antigravity.search",
       ];
       emitCommandOutput(ctx, `Antigravity doctor\n${lines.join("\n")}`);
     },

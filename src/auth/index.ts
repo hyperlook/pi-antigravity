@@ -16,8 +16,9 @@ export {
   activateAccount,
   failoverToNextAccount,
   listAccounts,
+  readAccountApiKeys,
   rememberAccount,
   removeAccount,
   updateRememberedAccount,
 } from "./accounts.js";
-export type { AccountSummary, StoredAccount } from "./accounts.js";
+export type { AccountAccess, AccountSummary, StoredAccount } from "./accounts.js";
