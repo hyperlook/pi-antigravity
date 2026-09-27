@@ -1,15 +1,10 @@
 # pi-antigravity
 
-[![npm version](https://img.shields.io/npm/v/pi-antigravity?logo=npm)](https://www.npmjs.com/package/pi-antigravity)
-[![npm downloads](https://img.shields.io/npm/dm/pi-antigravity?logo=npm)](https://www.npmjs.com/package/pi-antigravity)
-[![license](https://img.shields.io/npm/l/pi-antigravity)](LICENSE)
-[![Sponsor](https://img.shields.io/badge/Sponsor-GitHub-ea4aaa?logo=github)](https://github.com/sponsors/Rahularya01)
+[![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-**pi-antigravity** is a [Pi Coding Agent](https://pi.dev) provider that lets Pi talk directly to Google Antigravity / Cloud Code Assist models — Gemini, plus the Claude and GPT-OSS models Antigravity also advertises. Sign in with Google, pick a model, and go. Under the hood it handles OAuth login, native streaming, model routing, and quota diagnostics itself, so it never shells out to an external Antigravity CLI.
+**pi-antigravity** is an enhanced [Pi Coding Agent](https://pi.dev) provider for Google Antigravity / Cloud Code Assist models (Gemini, Claude, and GPT-OSS) featuring native Google Grounding search tools, seamless multi-account auto-failover, and direct OAuth authentication.
 
-Using [OpenCode](https://opencode.ai) instead of Pi? Install the companion plugin [`@rahularya01/opencode-antigravity`](https://www.npmjs.com/package/@rahularya01/opencode-antigravity).
-
-Want to equip Pi with MCP, web access, subagents, and todos? Install [`pi-essentials`](https://github.com/Rahularya01/pi-essentials) (currently in beta), an all-in-one companion extension designed for Pi.
+> **Fork & Enhancements:** Maintained by [@hyperlook](https://github.com/hyperlook/pi-antigravity), upstream base by [Rahul Arya](https://github.com/Rahularya01/pi-antigravity). Includes provider-native `web_search` and `url_context` agent tools, automatic multi-account rotation on 429 quota limits, and compatibility with the latest Pi API.
 
 > **Unofficial integration.** This project is not affiliated with or endorsed by Google. Use it only with an account and services you are authorized to access, and review its source before granting OAuth permissions.
 
@@ -33,19 +28,17 @@ Want to equip Pi with MCP, web access, subagents, and todos? Install [`pi-essent
 
 ## Install
 
-Install from npm:
+Install the package directly from GitHub:
 
 ```bash
-pi install npm:pi-antigravity
+pi install git:github.com/hyperlook/pi-antigravity
 ```
 
-Or install the latest repository version:
+Restart Pi (or run `/reload`) after installation. To update later:
 
 ```bash
-pi install git:github.com/Rahularya01/pi-antigravity
+pi update git:github.com/hyperlook/pi-antigravity
 ```
-
-Restart Pi (or run `/reload`) after installation. To update the npm package later, use `pi update npm:pi-antigravity`.
 
 ## Quick start
 
@@ -209,10 +202,7 @@ bun run check
 
 The package declares its Pi extension in `package.json` under `pi.extensions`. See the [Pi package documentation](https://pi.dev/docs/latest/packages) for package installation, manifest, and gallery conventions.
 
-## Support the project
+## License & Credits
 
-If `pi-antigravity` is useful to you, consider [sponsoring the project on GitHub](https://github.com/sponsors/Rahularya01).
-
-## License
-
-[MIT](LICENSE)
+- Upstream base by [Rahul Arya](https://github.com/Rahularya01/pi-antigravity).
+- Licensed under [MIT](LICENSE).
