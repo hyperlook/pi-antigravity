@@ -53,7 +53,7 @@ pi update git:github.com/hyperlook/pi-antigravity
 4. Start working. If a request fails, run `/antigravity.doctor` for sanitized diagnostics.
 
 To link another account without losing the existing one, run `/login antigravity`
-again and complete Google sign-in with the other account. Compare quota and switch with:
+again and complete Google sign-in with the other account. Manage and switch accounts with:
 
 ```text
 /antigravity.usage
@@ -61,7 +61,12 @@ again and complete Google sign-in with the other account. Compare quota and swit
 /antigravity.usage remove <index|email>
 ```
 
-With no arguments, `/antigravity.usage` shows every linked account's quota. When a UI is available it then opens a selector so you can switch without a `switch` subcommand. Reading quota does not change the active account until you pick one. `/antigravity.usage current` skips the comparison and shows only the active account.
+With no arguments, `/antigravity.usage` opens an interactive, zero-latency Control Center:
+
+- **Instant launch & progressive loading:** Opens immediately without waiting for quota network calls. You can switch immediately while quotas stream in asynchronously.
+- **Two-row quota dashboard:** Clean barcode sparklines (`▰▰▰▰▱`) per account for Gemini and Claude/GPT pools, with 5h short-window and weekly long-window pools and pixel-aligned countdowns.
+- **In-place shortcuts:** `↑`/`↓` to navigate, `Enter` to switch, `d` to unlink (with confirmation), and `Esc` to close.
+- **Direct CLI usage:** `<index|email>` switches instantly without opening the dashboard; `current` shows active account quota only.
 
 On a hard quota wall (HTTP 429 with a reset hint), the provider automatically tries the next linked account.
 

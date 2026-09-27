@@ -11,7 +11,7 @@ All notable changes to this project are documented in this file.
 
 ### Changed
 
-- **Account usage command:** `/antigravity.usage` now lists every linked account's quota and, when a UI is available, lets you select one to switch. `current` keeps the active-account-only view. `<index|email>` switches without a `switch` subcommand. `remove <index|email>` unlinks an account. `/antigravity.accounts` is removed. Quota reads do not change the active account.
+- **Interactive Control Center for `/antigravity.usage`:** `/antigravity.usage` is now a zero-latency interactive dashboard with asynchronous progressive quota loading. Accounts are displayed with clean usernames and two-row barcode sparklines (`▰▰▰▰▱`) for Gemini and Claude/GPT pools across 5h and weekly windows with aligned dynamic countdowns (`2h`, `45m`, `4d`, `18h`). Provides in-dialog keyboard shortcuts (`Enter` to switch, `d` to unlink with confirmation, `Esc` to close). Quota reads do not mutate active accounts. Direct CLI arguments (`<index|email>`, `current`, `remove <index|email>`) remain supported.
 
 ### Fixed
 
