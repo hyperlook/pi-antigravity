@@ -373,37 +373,92 @@ export function createThemeColorizer(theme: ThemeLike): DashboardColorizer {
   };
 }
 
+type ParsedAccountLabel = {
+  accountId: string;
+  username: string;
+  domain: string;
+  tld: string;
+  host: string;
+};
+
+function parseAccountLabel(account: { email?: string; accountId: string }): ParsedAccountLabel {
+  if (account.email && account.email.includes("@")) {
+    const parts = account.email.split("@");
+    const host = parts.slice(1).join("@");
+    const hostLabels = host.split(".").filter(Boolean);
+    return {
+      accountId: account.accountId,
+      username: parts[0] || account.accountId,
+      domain: hostLabels[0] || "",
+      tld: hostLabels.length > 1 ? hostLabels[hostLabels.length - 1] : "",
+      host,
+    };
+  }
+  return {
+    accountId: account.accountId,
+    username: account.accountId.length > 8 ? account.accountId.slice(0, 8) : account.accountId,
+    domain: "",
+    tld: "",
+    host: "",
+  };
+}
+
+function collidingIds(labels: Map<string, string>): string[][] {
+  const groups = new Map<string, string[]>();
+  for (const [id, label] of labels) {
+    const group = groups.get(label);
+    if (group) group.push(id);
+    else groups.set(label, [id]);
+  }
+  return [...groups.values()].filter((ids) => ids.length > 1);
+}
+
+function applyIfUnique(
+  labels: Map<string, string>,
+  ids: string[],
+  next: (id: string) => string | undefined,
+): void {
+  const proposed = ids.map((id) => next(id));
+  if (proposed.some((label) => !label)) return;
+  const nextLabels = proposed.filter((label): label is string => Boolean(label));
+  if (new Set(nextLabels).size !== ids.length) return;
+  const idSet = new Set(ids);
+  const outside = new Set(
+    [...labels.entries()].filter(([id]) => !idSet.has(id)).map(([, label]) => label),
+  );
+  if (nextLabels.some((label) => outside.has(label))) return;
+  ids.forEach((id, index) => labels.set(id, nextLabels[index]));
+}
+
 export function deriveUniqueShortLabels(
   accounts: Array<{ email?: string; accountId: string }>,
 ): Map<string, string> {
-  const result = new Map<string, string>();
-  const parsed = accounts.map((acc) => {
-    let username: string;
-    let domain = "";
-    if (acc.email && acc.email.includes("@")) {
-      const parts = acc.email.split("@");
-      username = parts[0];
-      const host = parts[1] || "";
-      domain = host.split(".")[0] || host;
-    } else {
-      username = acc.accountId.length > 8 ? acc.accountId.slice(0, 8) : acc.accountId;
-    }
-    return { accountId: acc.accountId, username, domain };
-  });
+  const parsed = new Map(
+    accounts.map((account) => [account.accountId, parseAccountLabel(account)]),
+  );
+  const labels = new Map<string, string>();
+  for (const item of parsed.values()) labels.set(item.accountId, item.username);
 
-  const counts = new Map<string, number>();
-  for (const item of parsed) {
-    counts.set(item.username, (counts.get(item.username) || 0) + 1);
-  }
-
-  for (const item of parsed) {
-    if ((counts.get(item.username) || 0) > 1 && item.domain) {
-      result.set(item.accountId, `${item.username} (${item.domain})`);
-    } else {
-      result.set(item.accountId, item.username);
+  const strategies: Array<(item: ParsedAccountLabel) => string | undefined> = [
+    (item) => (item.domain ? `${item.username} (${item.domain})` : undefined),
+    (item) => (item.tld && item.tld !== item.domain ? `${item.username} (${item.tld})` : undefined),
+    (item) => (item.host ? `${item.username} (${item.host})` : undefined),
+  ];
+  for (const strategy of strategies) {
+    for (const ids of collidingIds(labels)) {
+      applyIfUnique(labels, ids, (id) => {
+        const item = parsed.get(id);
+        return item ? strategy(item) : undefined;
+      });
     }
   }
-  return result;
+  for (const ids of collidingIds(labels)) {
+    ids.forEach((id, index) => {
+      const base = parsed.get(id)?.username || id;
+      labels.set(id, `${base} #${index + 1}`);
+    });
+  }
+  return labels;
 }
 
 /**
@@ -473,7 +528,29 @@ export function formatQuotaPercent(remainingFraction?: number): string {
   return `${pct}%`.padStart(4);
 }
 
-export function extractDashboardModelQuotas(usage?: AccountUsage): DashboardModelQuotas {
+function classifyQuotaGroup(name: string): "gemini" | "claude" | "generic" | "other" {
+  const normalized = name.toLowerCase().trim();
+  if (/claude|gpt|anthropic/.test(normalized)) return "claude";
+  if (/gemini|google/.test(normalized)) return "gemini";
+  if (!normalized || /^(quota group|limit|unknown)$/.test(normalized)) return "generic";
+  return "other";
+}
+
+function classifyQuotaWindow(bucket: QuotaBucket, now: number): "week" | "5h" | undefined {
+  const name =
+    `${bucket.displayName || ""} ${bucket.window || ""} ${bucket.bucketId || ""}`.toLowerCase();
+  if (/\bweek(?:ly)?\b|\b7d\b|7-day/.test(name)) return "week";
+  if (/\b5h\b|5-hour|5 hour|\bsliding\b|\bslide\b/.test(name)) return "5h";
+  if (!bucket.resetTime) return undefined;
+  const diff = Date.parse(bucket.resetTime) - now;
+  if (!Number.isFinite(diff)) return undefined;
+  return diff > 24 * 3600 * 1000 ? "week" : "5h";
+}
+
+export function extractDashboardModelQuotas(
+  usage?: AccountUsage,
+  now = Date.now(),
+): DashboardModelQuotas {
   const result: DashboardModelQuotas = {
     gemini: {},
     claude: {},
@@ -482,50 +559,33 @@ export function extractDashboardModelQuotas(usage?: AccountUsage): DashboardMode
 
   let geminiGroup: QuotaGroup | undefined;
   let claudeGroup: QuotaGroup | undefined;
+  const genericGroups: QuotaGroup[] = [];
 
-  for (const g of usage.groups || []) {
-    const name = (g.displayName || "").toLowerCase();
-    if (/claude|gpt|anthropic/.test(name)) {
-      claudeGroup = g;
-    } else if (/gemini|google/.test(name)) {
-      geminiGroup = g;
-    }
+  for (const group of usage.groups || []) {
+    const kind = classifyQuotaGroup(group.displayName || "");
+    if (kind === "claude") claudeGroup = group;
+    else if (kind === "gemini") geminiGroup = group;
+    else if (kind === "generic") genericGroups.push(group);
   }
 
-  const groups = usage.groups || [];
-  if (!geminiGroup && !claudeGroup && groups.length > 0) {
-    geminiGroup = groups[0];
-    claudeGroup = groups[1];
-  } else if (!geminiGroup && groups.length > 0 && claudeGroup !== groups[0]) {
-    geminiGroup = groups[0];
-  } else if (!claudeGroup && groups.length > 1) {
-    claudeGroup = groups.find((g) => g !== geminiGroup);
-  }
+  // Positional fallback only for unnamed groups. A named non-Claude group must not
+  // be drawn on the Claude row.
+  if (!geminiGroup && genericGroups.length > 0) geminiGroup = genericGroups.shift();
+  if (!claudeGroup && genericGroups.length > 0) claudeGroup = genericGroups.shift();
 
   function resolveBuckets(group?: QuotaGroup): ModelQuotaPair {
     if (!group || !group.buckets || group.buckets.length === 0) return {};
     const pair: ModelQuotaPair = {};
-    for (const b of group.buckets) {
-      const bName = `${b.displayName || ""} ${b.window || ""} ${b.bucketId || ""}`.toLowerCase();
+    for (const bucket of group.buckets) {
       const quota: WindowQuota = {
-        remainingFraction: b.remainingFraction ?? 0,
-        resetTime: b.resetTime,
+        remainingFraction: bucket.remainingFraction ?? 0,
+        resetTime: bucket.resetTime,
       };
-      if (/week/.test(bName)) {
-        pair.weeklyWindow = quota;
-      } else if (/5|hour|slide/.test(bName)) {
-        pair.shortWindow = quota;
-      } else if (b.resetTime) {
-        const diff = Date.parse(b.resetTime) - Date.now();
-        if (diff > 24 * 3600 * 1000) {
-          pair.weeklyWindow = quota;
-        } else {
-          pair.shortWindow = quota;
-        }
-      } else {
-        if (!pair.shortWindow) pair.shortWindow = quota;
-        else if (!pair.weeklyWindow) pair.weeklyWindow = quota;
-      }
+      const kind = classifyQuotaWindow(bucket, now);
+      if (kind === "week") pair.weeklyWindow = quota;
+      else if (kind === "5h") pair.shortWindow = quota;
+      else if (!pair.shortWindow) pair.shortWindow = quota;
+      else if (!pair.weeklyWindow) pair.weeklyWindow = quota;
     }
     return pair;
   }
@@ -583,6 +643,17 @@ export function renderQuotaCell(
   return `${bar} ${pct} ${cd}`;
 }
 
+function fitAccountLabel(label: string, width = 13): string {
+  if (label.length <= width) return label;
+  const suffixMatch = / \([^)]+\)$/.exec(label);
+  const suffix = suffixMatch?.[0];
+  if (suffix && suffixMatch && suffix.length <= width - 2) {
+    const headWidth = width - suffix.length - 1;
+    return `${label.slice(0, suffixMatch.index).slice(0, headWidth)}…${suffix}`;
+  }
+  return `${label.slice(0, Math.max(0, width - 1))}…`;
+}
+
 export function renderAccountDashboardLines(
   row: DashboardAccountRow,
   options?: {
@@ -598,8 +669,9 @@ export function renderAccountDashboardLines(
   const styledCursor = colorizer.cursor(cursorStr);
   const cursorEmpty = "  ";
 
-  // Account column: 13 chars width + 2 spacing spaces to prevent collision with model name
-  const nameLabel = row.shortLabel.length > 13 ? `${row.shortLabel.slice(0, 12)}…` : row.shortLabel;
+  // Account column: 13 chars width + 2 spacing spaces to prevent collision with model name.
+  // Keep a parenthetical disambiguator when the local part is too long.
+  const nameLabel = fitAccountLabel(row.shortLabel, 13);
   const styledName = colorizer.accountName(nameLabel.padEnd(13), row.active);
   const accountSpacing = "  ";
 
@@ -627,7 +699,7 @@ export function renderAccountDashboardLines(
     ];
   }
 
-  const quotas = extractDashboardModelQuotas(row.usage);
+  const quotas = extractDashboardModelQuotas(row.usage, now);
   const g5h = renderQuotaCell("5h", quotas.gemini.shortWindow, colorizer, now);
   const gWk = renderQuotaCell("week", quotas.gemini.weeklyWindow, colorizer, now);
   const c5h = renderQuotaCell("5h", quotas.claude.shortWindow, colorizer, now);

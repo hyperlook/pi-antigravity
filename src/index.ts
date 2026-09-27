@@ -1,4 +1,8 @@
-import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import type {
+  ExtensionAPI,
+  ExtensionCommandContext,
+  KeybindingsManager,
+} from "@earendil-works/pi-coding-agent";
 import { StringEnum, Type } from "@earendil-works/pi-ai";
 import { registerApiProvider } from "@earendil-works/pi-ai/compat";
 import {
@@ -36,7 +40,7 @@ import {
   WebSearchSchema,
 } from "./search/index.js";
 import { ANTIGRAVITY_API, streamAntigravity } from "./stream/index.js";
-import { matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
+import { isKeyRepeat, matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
 import type { AccountUsage } from "./types/types.js";
 import {
   createThemeColorizer,
@@ -189,85 +193,96 @@ class AntigravityDashboardComponent {
   private selectedIndex: number;
   private confirmDeleteIndex?: number;
   private theme: ThemeLike;
+  private keybindings: KeybindingsManager;
   private onDone: (result: DashboardResult) => void;
   private cachedWidth?: number;
   private cachedLines?: string[];
+  private settled = false;
 
   constructor(
     rows: DashboardAccountRow[],
     initialIndex: number,
     theme: ThemeLike,
+    keybindings: KeybindingsManager,
     onDone: (result: DashboardResult) => void,
   ) {
     this.rows = rows;
     this.selectedIndex = Math.max(0, Math.min(initialIndex, rows.length - 1));
     this.theme = theme;
+    this.keybindings = keybindings;
     this.onDone = onDone;
   }
 
   updateRowUsage(index: number, usage: AccountUsage): void {
-    if (this.rows[index]) {
-      this.rows[index].loading = false;
-      this.rows[index].usage = usage;
-      this.invalidate();
-    }
+    if (this.settled || !this.rows[index]) return;
+    this.rows[index].loading = false;
+    this.rows[index].usage = usage;
+    this.invalidate();
   }
 
   setRowError(index: number, error: string): void {
-    if (this.rows[index]) {
-      this.rows[index].loading = false;
-      this.rows[index].error = error;
-      this.invalidate();
-    }
+    if (this.settled || !this.rows[index]) return;
+    this.rows[index].loading = false;
+    this.rows[index].error = error;
+    this.invalidate();
+  }
+
+  private finish(result: DashboardResult): void {
+    if (this.settled) return;
+    this.settled = true;
+    this.onDone(result);
   }
 
   handleInput(data: string): void {
+    if (this.settled) return;
     if (this.rows.length === 0) {
-      this.onDone({ action: "close" });
+      this.finish({ action: "close" });
       return;
     }
 
-    if (matchesKey(data, "escape") || matchesKey(data, "ctrl+c")) {
+    if (this.keybindings.matches(data, "tui.select.cancel")) {
       if (this.confirmDeleteIndex !== undefined) {
         this.confirmDeleteIndex = undefined;
         this.invalidate();
         return;
       }
-      this.onDone({ action: "close" });
+      this.finish({ action: "close" });
       return;
     }
 
-    if (matchesKey(data, "up") || matchesKey(data, "k")) {
+    if (this.keybindings.matches(data, "tui.select.up") || matchesKey(data, "k")) {
       this.confirmDeleteIndex = undefined;
       this.selectedIndex = (this.selectedIndex - 1 + this.rows.length) % this.rows.length;
       this.invalidate();
       return;
     }
 
-    if (matchesKey(data, "down") || matchesKey(data, "j")) {
+    if (this.keybindings.matches(data, "tui.select.down") || matchesKey(data, "j")) {
       this.confirmDeleteIndex = undefined;
       this.selectedIndex = (this.selectedIndex + 1) % this.rows.length;
       this.invalidate();
       return;
     }
 
-    if (matchesKey(data, "return")) {
+    if (this.keybindings.matches(data, "tui.select.confirm")) {
       const selected = this.rows[this.selectedIndex];
-      if (selected) {
-        this.onDone({ action: "switch", target: selected });
-      }
+      if (selected) this.finish({ action: "switch", target: selected });
       return;
     }
 
+    // Arm with d/x. Confirm with y so key-repeat cannot unlink.
     if (matchesKey(data, "d") || matchesKey(data, "x")) {
+      if (isKeyRepeat(data) || this.confirmDeleteIndex === this.selectedIndex) return;
+      this.confirmDeleteIndex = this.selectedIndex;
+      this.invalidate();
+      return;
+    }
+
+    if (matchesKey(data, "y") || matchesKey(data, "shift+y")) {
+      if (isKeyRepeat(data)) return;
       if (this.confirmDeleteIndex === this.selectedIndex) {
         const selected = this.rows[this.selectedIndex];
-        if (selected) {
-          this.onDone({ action: "remove", target: selected });
-        }
-      } else {
-        this.confirmDeleteIndex = this.selectedIndex;
-        this.invalidate();
+        if (selected) this.finish({ action: "remove", target: selected });
       }
       return;
     }
@@ -287,13 +302,16 @@ class AntigravityDashboardComponent {
     const lines: string[] = [];
     const th = this.theme;
     const colorizer = createThemeColorizer(th);
+    const safeWidth = Math.max(0, width);
 
-    // Header
+    // Header. Keep the previous inset on normal widths, but never exceed the viewport.
     const title = th.bold(th.fg("accent", "Antigravity 控制中心"));
-    const hr = th.fg("borderMuted", "─".repeat(Math.max(10, width - 4)));
+    const inner = Math.max(0, safeWidth - 2);
+    const ruleChars = Math.min(inner, Math.max(10, safeWidth - 4));
+    const hr = th.fg("borderMuted", "─".repeat(ruleChars));
     lines.push("");
-    lines.push(`  ${title}`);
-    lines.push(`  ${hr}`);
+    lines.push(truncateToWidth(`  ${title}`, safeWidth));
+    lines.push(truncateToWidth(`  ${hr}`, safeWidth));
     lines.push("");
 
     // Body: Two-row per account
@@ -303,7 +321,7 @@ class AntigravityDashboardComponent {
       now: Date.now(),
     });
     for (const line of body.split("\n")) {
-      lines.push(truncateToWidth(`  ${line}`, width));
+      lines.push(truncateToWidth(`  ${line}`, safeWidth));
     }
 
     // Footer
@@ -314,13 +332,13 @@ class AntigravityDashboardComponent {
       const targetName = target ? target.shortLabel : "该账号";
       lines.push(
         truncateToWidth(
-          `  ${th.bold(th.fg("warning", `⚠️  确定要解绑 [${targetName}] 吗？再次按 d 确认，按 Esc 取消`))}`,
-          width,
+          `  ${th.bold(th.fg("warning", `⚠️  确定要解绑 [${targetName}] 吗？按 y 确认，按 Esc 取消`))}`,
+          safeWidth,
         ),
       );
     } else {
       const hint = th.fg("dim", "↑↓ 移动 · Enter 切换 · d 删除 · Esc 退出");
-      lines.push(truncateToWidth(`  ${hint}`, width));
+      lines.push(truncateToWidth(`  ${hint}`, safeWidth));
     }
     lines.push("");
 
@@ -362,11 +380,13 @@ async function compareAndMaybeSwitch(ctx: ExtensionCommandContext): Promise<void
   // 1. Interactive TUI Mode: Instant zero-latency launch with async progressive loading
   if (ctx.hasUI && ctx.mode === "tui") {
     let component: AntigravityDashboardComponent | undefined;
+    let closed = false;
 
     // Start background fetch for all accounts in parallel immediately
     const fetchPromises = access.map(async (account, index) => {
       if (!account.apiKey) {
         const errMsg = redactSecrets(account.error || "No credentials");
+        if (closed) return;
         rows[index].loading = false;
         rows[index].error = errMsg;
         component?.setRowError(index, errMsg);
@@ -376,10 +396,12 @@ async function compareAndMaybeSwitch(ctx: ExtensionCommandContext): Promise<void
         const usage = await runWithDiagnostics(() => fetchAccountUsage(account.apiKey), {
           commit: account.active,
         });
+        if (closed) return;
         rows[index].loading = false;
         rows[index].usage = usage;
         component?.updateRowUsage(index, usage);
       } catch (error) {
+        if (closed) return;
         const msg = redactSecrets(error instanceof Error ? error.message : String(error));
         rows[index].loading = false;
         rows[index].error = msg;
@@ -387,14 +409,20 @@ async function compareAndMaybeSwitch(ctx: ExtensionCommandContext): Promise<void
       }
     });
 
-    const result = await ctx.ui.custom<DashboardResult>((tui, theme, _kb, done) => {
-      component = new AntigravityDashboardComponent(rows, initialIndex, theme, (res) => done(res));
-      // Trigger render when fetch updates arrive
+    const result = await ctx.ui.custom<DashboardResult>((tui, theme, kb, done) => {
+      component = new AntigravityDashboardComponent(rows, initialIndex, theme, kb, (res) => {
+        closed = true;
+        done(res);
+      });
+      // Trigger render when fetch updates arrive. Ignore completions after the dialog closes.
       fetchPromises.forEach((p) => {
-        void p.then(() => tui.requestRender());
+        void p.then(() => {
+          if (!closed) tui.requestRender();
+        });
       });
       return component;
     });
+    closed = true;
 
     if (!result || result.action === "close") return;
 
@@ -422,7 +450,14 @@ async function compareAndMaybeSwitch(ctx: ExtensionCommandContext): Promise<void
     return;
   }
 
-  // 2. Non-interactive / Headless / RPC mode: Wait all and print formatted dashboard
+  // 2. Non-interactive / Headless / RPC mode: Wait all and print formatted dashboard.
+  // RPC can forward select(), but not custom() terminal components.
+  if (ctx.hasUI) {
+    ctx.ui.notify(
+      `Fetching usage for ${access.length} account${access.length === 1 ? "" : "s"}…`,
+      "info",
+    );
+  }
   await Promise.all(
     access.map(async (account, index) => {
       if (!account.apiKey) {
@@ -444,13 +479,24 @@ async function compareAndMaybeSwitch(ctx: ExtensionCommandContext): Promise<void
     }),
   );
 
-  const dashboardOutput = formatAccountsDashboard(rows, {
-    selectedIndex: initialIndex,
-    now: Date.now(),
-  });
+  const dashboardOutput = formatAccountsDashboard(rows, { now: Date.now() });
   const hint =
     "Switch: /antigravity.usage <index|email>\nRemove: /antigravity.usage remove <index|email>\nActive only: /antigravity.usage current";
   emitCommandOutput(ctx, `Antigravity accounts\n\n${dashboardOutput}\n\n${hint}`);
+
+  if (!ctx.hasUI || rows.length < 2) return;
+  const choices = rows.map((row) => ({
+    row,
+    label: `${row.active ? "* " : ""}${row.index}. ${row.shortLabel}`,
+  }));
+  const selected = await ctx.ui.select(
+    "Switch Antigravity account",
+    choices.map((choice) => choice.label),
+  );
+  const chosen = choices.find((choice) => choice.label === selected)?.row;
+  if (!chosen || chosen.active) return;
+  const account = await activateAccount(String(chosen.index));
+  emitCommandOutput(ctx, `Switched to ${account.email || account.accountId}`);
 }
 
 async function handleUsageCommand(args: string, ctx: ExtensionCommandContext): Promise<void> {

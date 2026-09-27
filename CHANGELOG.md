@@ -11,10 +11,11 @@ All notable changes to this project are documented in this file.
 
 ### Changed
 
-- **Interactive Control Center for `/antigravity.usage`:** `/antigravity.usage` is now a zero-latency interactive dashboard with asynchronous progressive quota loading. Accounts are displayed with clean usernames and two-row barcode sparklines (`▰▰▰▰▱`) for Gemini and Claude/GPT pools across 5h and weekly windows with aligned dynamic countdowns (`2h`, `45m`, `4d`, `18h`). Provides in-dialog keyboard shortcuts (`Enter` to switch, `d` to unlink with confirmation, `Esc` to close). Quota reads do not mutate active accounts. Direct CLI arguments (`<index|email>`, `current`, `remove <index|email>`) remain supported.
+- **Interactive Control Center for `/antigravity.usage`:** `/antigravity.usage` is now a zero-latency interactive dashboard with asynchronous progressive quota loading. Accounts are displayed with clean usernames and two-row barcode sparklines (`▰▰▰▰▱`) for Gemini and Claude/GPT pools across 5h and weekly windows with aligned dynamic countdowns (`2h`, `45m`, `4d`, `18h`). Provides in-dialog keyboard shortcuts (`Enter` to switch, `d` then `y` to unlink, `Esc` to close). Quota reads do not mutate active accounts. Direct CLI arguments (`<index|email>`, `current`, `remove <index|email>`) remain supported.
 
 ### Fixed
 
+- **Usage dashboard safety:** Unlink now requires `y` after `d`, so key repeat cannot remove an account. Quota windows are classified by window name rather than a bare `5` or `hour` match, and a named non-Claude group is no longer drawn on the Claude row. Non-terminal UIs get the account selector back. Narrow terminals no longer overflow the dashboard header.
 - **Pi 0.86 transcript context:** Read the system prompt and tool declarations from transcript system messages (`getCurrentSystemPrompt` / `getCurrentTools`) instead of the removed `context.systemPrompt` / `context.tools` fields. Pi 0.86+ otherwise sent Gemini requests with no tools, which surfaced as `MALFORMED_FUNCTION_CALL`.
 
 ## [0.7.1] - 2026-09-03

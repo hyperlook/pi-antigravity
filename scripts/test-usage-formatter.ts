@@ -3,6 +3,7 @@ import {
   deriveUniqueShortLabels,
   formatAccountsDashboard,
   formatAccountsUsage,
+  extractDashboardModelQuotas,
   formatQuotaBar,
   formatQuotaCountdown,
   formatUsageSummary,
@@ -108,6 +109,14 @@ expect(labelMap.get("1")).toBe("look (gmail)");
 expect(labelMap.get("2")).toBe("work");
 expect(labelMap.get("3")).toBe("look (qq)");
 
+const sameOrg = deriveUniqueShortLabels([
+  { accountId: "a", email: "user@company.com" },
+  { accountId: "b", email: "user@company.org" },
+]);
+expect(sameOrg.get("a")).toBe("user (com)");
+expect(sameOrg.get("b")).toBe("user (org)");
+expect(new Set(sameOrg.values()).size).toBe(2);
+
 // Test quota bar
 expect(formatQuotaBar(1.0, 8)).toBe("▰▰▰▰▰▰▰▰");
 expect(formatQuotaBar(0.5, 8)).toBe("▰▰▰▰▱▱▱▱");
@@ -170,5 +179,90 @@ expect(dashboardText).toContain("Claude");
 expect(dashboardText).toContain("85%");
 expect(dashboardText).toContain("100%");
 expect(dashboardText).toContain("fetching quota");
+expect(dashboardText).not.toContain("> ");
+
+const longNames = formatAccountsDashboard([
+  {
+    index: 1,
+    accountId: "1",
+    shortLabel: "christopher (gmail)",
+    active: false,
+    loading: true,
+  },
+  {
+    index: 2,
+    accountId: "2",
+    shortLabel: "christopher (qq)",
+    active: false,
+    loading: true,
+  },
+]);
+expect(longNames).toContain("(gmail)");
+expect(longNames).toContain("(qq)");
+expect(longNames).not.toContain("christopher (gmail)");
+
+const named = extractDashboardModelQuotas(
+  {
+    ...baseUsage,
+    groups: [
+      {
+        displayName: "Gemini",
+        buckets: [
+          {
+            bucketId: "bucket-5",
+            displayName: "Limit",
+            remainingFraction: 0.2,
+            resetTime: new Date(testNow + 4 * 86400000).toISOString(),
+          },
+          {
+            bucketId: "weekly-5",
+            displayName: "Weekly limit",
+            remainingFraction: 0.8,
+            resetTime: new Date(testNow + 3 * 86400000).toISOString(),
+          },
+          {
+            bucketId: "slide",
+            displayName: "5-hour window",
+            remainingFraction: 0.4,
+            resetTime: new Date(testNow + 7200000).toISOString(),
+          },
+        ],
+      },
+      {
+        displayName: "Image generation",
+        buckets: [
+          {
+            bucketId: "img",
+            displayName: "5-hour window",
+            remainingFraction: 0.1,
+          },
+        ],
+      },
+    ],
+  },
+  testNow,
+);
+expect(named.gemini.weeklyWindow?.remainingFraction).toBe(0.8);
+expect(named.gemini.shortWindow?.remainingFraction).toBe(0.4);
+expect(named.claude.shortWindow).toBeUndefined();
+
+const unnamed = extractDashboardModelQuotas(
+  {
+    ...baseUsage,
+    groups: [
+      {
+        displayName: "Quota group",
+        buckets: [{ bucketId: "a", displayName: "Limit", remainingFraction: 0.6 }],
+      },
+      {
+        displayName: "",
+        buckets: [{ bucketId: "b", displayName: "Limit", remainingFraction: 0.3 }],
+      },
+    ],
+  },
+  testNow,
+);
+expect(unnamed.gemini.shortWindow?.remainingFraction).toBe(0.6);
+expect(unnamed.claude.shortWindow?.remainingFraction).toBe(0.3);
 
 console.log("Usage formatter tests passed!");
