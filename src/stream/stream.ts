@@ -78,6 +78,7 @@ import {
   sanitizeText,
 } from "../utils/util.js";
 import { antigravityFetch, prewarmConnection } from "../utils/http.js";
+import { isHardQuotaWall } from "../runtime/retry.js";
 
 export { ANTIGRAVITY_API };
 
@@ -1043,18 +1044,14 @@ export function friendlyAntigravityError(status: number | undefined, text: strin
     if (/Individual quota reached/i.test(msg)) {
       return `Quota reached. Please wait ${wait || "for reset"}. Next: switch models or try again after reset.`;
     }
-    // Google answers a real quota wall with a "Resets in …" hint, but uses generic
-    // RESOURCE_EXHAUSTED ("Resource has been exhausted (e.g. check quota).") for
-    // transient throttling and capacity pressure. Classifying on the word "quota"
-    // alone wrongly marked transient throttling as a hard quota wall, disabling
-    // Pi's automatic retry backoff. Keep real quota walls non-retryable, and
-    // format transient throttling so Pi's retry mechanism engages.
-    const isMinuteOrSecondLimit = /per\s*(?:minute|second|min|sec)|rpm|tpm|qps/i.test(msg);
+    // Use the shared hard-quota-wall classifier for the common cases, plus the
+    // extra "limit reached|reached your" patterns that only affect message
+    // formatting (not the retry-loop break which uses isHardQuotaWall directly).
     const hardLimit =
-      Boolean(wait) ||
-      (!isMinuteOrSecondLimit &&
+      isHardQuotaWall(msg) ||
+      (!/per\s*(?:minute|second|min|sec)|rpm|tpm|qps/i.test(msg) &&
         !/rate.?limit/i.test(msg) &&
-        /quota exceeded|exceeded your|limit reached|reached your|daily limit/i.test(msg));
+        /limit reached|reached your/i.test(msg));
     if (hardLimit) {
       return `Quota reached.${wait ? ` Please wait ${wait}.` : ""} Next: switch models or retry later.`;
     }
@@ -1514,17 +1511,7 @@ export function streamAntigravity(
             setLastStatus(response.status);
             if (response.ok) break;
             lastText = await response.text();
-            const isMinuteOrSecondLimit = /per\s*(?:minute|second|min|sec)|rpm|tpm|qps/i.test(
-              lastText,
-            );
-            if (
-              response.status === 429 &&
-              (/Individual quota reached/i.test(lastText) ||
-                /Resets? in /i.test(lastText) ||
-                (!isMinuteOrSecondLimit &&
-                  !/rate.?limit/i.test(lastText) &&
-                  /quota exceeded|exceeded your|daily limit/i.test(lastText)))
-            ) {
+            if (response.status === 429 && isHardQuotaWall(lastText)) {
               break;
             }
             if (![403, 404, 429, 500, 502, 503, 504].includes(response.status)) break;
