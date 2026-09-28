@@ -13,6 +13,14 @@ All notable changes to this project are documented in this file.
 
 - **Interactive Control Center for `/antigravity.usage`:** `/antigravity.usage` is now a zero-latency interactive dashboard with asynchronous progressive quota loading. Accounts are displayed with clean usernames and two-row barcode sparklines (`▰▰▰▰▱`) for Gemini and Claude/GPT pools across 5h and weekly windows with aligned dynamic countdowns (`2h`, `45m`, `4d`, `18h`). Provides in-dialog keyboard shortcuts (`Enter` to switch, `d` then `y` to unlink, `Esc` to close). Quota reads do not mutate active accounts. Direct CLI arguments (`<index|email>`, `current`, `remove <index|email>`) remain supported.
 
+### Removed
+
+- **Redundant slash commands:** `/antigravity.image` and `/antigravity.search` are gone — `generate_image`, `web_search`, and `url_context` are already available to the agent as built-in tools. `/antigravity.refresh` folded into `/antigravity models`, and the `current` / `remove` / `<index|email>` arguments folded into the Control Center dialog. `/antigravity.usage` is kept as an alias of `/antigravity`.
+
+### Changed
+
+- **Unified `/antigravity` command surface (Stage 3):** `/antigravity` opens the Control Center, `/antigravity models` refreshes Pi's dynamic model catalog before printing the model list and quota fractions, and `/antigravity doctor` prints the diagnostics flight recorder. `src/index.ts` is now a ~90-line composition root: the TUI lives in `src/ui/dashboard.ts`, the command surface in `src/commands/antigravity.ts`, and tool registration in `src/tools/index.ts`.
+
 ### Fixed
 
 - **Usage dashboard safety:** Unlink now requires `y` after `d`, so key repeat cannot remove an account. Quota windows are classified by window name rather than a bare `5` or `hour` match, and a named non-Claude group is no longer drawn on the Claude row. Non-terminal UIs get the account selector back. Narrow terminals no longer overflow the dashboard header.

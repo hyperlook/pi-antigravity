@@ -53,14 +53,14 @@ export type ImageGenerateRequest = {
   requestId: string;
 };
 
-export type ImageCommandArgs = {
+export type ImagePromptOptions = {
   prompt: string;
   aspectRatio?: string;
   model?: string;
   path?: string;
 };
 
-export type GenerateImageOptions = ImageCommandArgs & {
+export type GenerateImageOptions = ImagePromptOptions & {
   apiKey: string;
   cwd: string;
   signal?: AbortSignal;
@@ -116,35 +116,6 @@ export function assertSafeAspectRatio(ratio: string): ImageAspectRatio {
   throw new Error(
     `Unsupported aspect ratio: ${value}. Use one of ${IMAGE_ASPECT_RATIOS.join(", ")}.`,
   );
-}
-
-export function parseImageCommandArgs(args: string): ImageCommandArgs {
-  const tokens = args.trim().split(/\s+/).filter(Boolean);
-  const out: ImageCommandArgs = { prompt: "" };
-  const rest: string[] = [];
-  for (let i = 0; i < tokens.length; i++) {
-    const token = tokens[i];
-    if (token === undefined) continue;
-    const next = tokens[i + 1];
-    if ((token === "--ratio" || token === "--aspect-ratio") && next) {
-      out.aspectRatio = next;
-      i += 1;
-      continue;
-    }
-    if (token === "--model" && next) {
-      out.model = next;
-      i += 1;
-      continue;
-    }
-    if (token === "--path" && next) {
-      out.path = next;
-      i += 1;
-      continue;
-    }
-    rest.push(token);
-  }
-  out.prompt = rest.join(" ");
-  return out;
 }
 
 export function resolveImageSavePath(
