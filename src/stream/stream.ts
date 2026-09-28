@@ -963,7 +963,7 @@ export function buildRequest(
     (m) => m.role === "assistant" && m.stopReason !== "error" && m.stopReason !== "aborted",
   ).length;
 
-  const { conversationId, trajectoryId } = resolveSessionTrajectory(transcript);
+  const { conversationId, trajectoryId } = resolveSessionTrajectory(transcript, options.sessionId);
 
   const envelope = antigravityRequestEnvelope(runtimeModel, {
     isClaude,

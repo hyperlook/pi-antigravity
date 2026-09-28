@@ -4,7 +4,9 @@ import type {
   KeybindingsManager,
 } from "@earendil-works/pi-coding-agent";
 import { StringEnum, Type } from "@earendil-works/pi-ai";
-import { registerApiProvider } from "@earendil-works/pi-ai/compat";
+// Namespace import: Oh My Pi rewrites this specifier onto bundled pi-ai, which
+// does not export registerApiProvider. A static named import fails plugin load.
+import * as piAiCompat from "@earendil-works/pi-ai/compat";
 import {
   activateAccount,
   getApiKey,
@@ -525,12 +527,29 @@ async function handleUsageCommand(args: string, ctx: ExtensionCommandContext): P
   }
 }
 
-export default function (pi: ExtensionAPI): void {
-  registerApiProvider({
+type CompatApiProviderRegistrar = (provider: {
+  api: typeof ANTIGRAVITY_API;
+  stream: typeof streamAntigravity;
+  streamSimple: typeof streamAntigravity;
+}) => void;
+
+/**
+ * Pi dispatches custom APIs through the compat registry. Oh My Pi does not
+ * export `registerApiProvider` and registers the stream inside `registerProvider`.
+ */
+function registerCompatApiProvider(): void {
+  const register = (piAiCompat as { registerApiProvider?: CompatApiProviderRegistrar })
+    .registerApiProvider;
+  if (typeof register !== "function") return;
+  register({
     api: ANTIGRAVITY_API,
     stream: streamAntigravity,
     streamSimple: streamAntigravity,
   });
+}
+
+export default function (pi: ExtensionAPI): void {
+  registerCompatApiProvider();
 
   const initialCatalog = getCurrentAntigravityCatalog();
 
