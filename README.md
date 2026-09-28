@@ -50,23 +50,20 @@ pi update git:github.com/hyperlook/pi-antigravity
    /model antigravity/gemini-3.8-flash
    ```
 
-4. Start working. If a request fails, run `/antigravity.doctor` for sanitized diagnostics.
+4. Start working. If a request fails, run `/antigravity doctor` for sanitized diagnostics.
 
 To link another account without losing the existing one, run `/login antigravity`
 again and complete Google sign-in with the other account. Manage and switch accounts with:
 
 ```text
-/antigravity.usage
-/antigravity.usage <index|email>
-/antigravity.usage remove <index|email>
+/antigravity
 ```
 
-With no arguments, `/antigravity.usage` opens an interactive, zero-latency Control Center:
+`/antigravity` opens an interactive, zero-latency Control Center:
 
 - **Instant launch & progressive loading:** Opens immediately without waiting for quota network calls. You can switch immediately while quotas stream in asynchronously.
 - **Two-row quota dashboard:** Clean barcode sparklines (`▰▰▰▰▱`) per account for Gemini and Claude/GPT pools, with 5h short-window and weekly long-window pools and pixel-aligned countdowns.
-- **In-place shortcuts:** `↑`/`↓` to navigate, `Enter` to switch, `d` then `y` to unlink, and `Esc` to close.
-- **Direct CLI usage:** `<index|email>` switches instantly without opening the dashboard; `current` shows active account quota only.
+- **In-place shortcuts:** `↑`/`↓` (or `j`/`k`) to navigate, `Enter` to switch, `d` then `y` to unlink, and `Esc` to close.
 
 Outside the terminal UI, the same command prints the dashboard. If a dialog UI is available, it then opens a selector to switch.
 
@@ -103,13 +100,11 @@ Review these permissions before approving access. If your credentials expire or 
 | --- | --- |
 | `/login antigravity` | Sign in to Google and configure the provider. |
 | `/model antigravity/<model-id>` | Choose a registered Antigravity model. |
-| `/antigravity.usage` | Compare linked accounts' quota, then select one to switch. `current` shows only the active account. `<index|email>` switches directly. `remove <index|email>` unlinks an account. |
-| `/antigravity.models` | List available runtime models, remaining shared-pool quota, and capabilities. |
-| `/antigravity.models all` | Include tab/chat models normally hidden from the model list. |
-| `/antigravity.refresh` | Force refresh the dynamic model catalog from Antigravity. |
-| `/antigravity.doctor` | Show sanitized provider diagnostics, including the endpoint, status, and resolved runtime model. |
-| `/antigravity.image <prompt>` | Generate an image via Antigravity and save it under `.pi/generated-images/`. Optional `--ratio 16:9`, `--model`, `--path`. |
-| `/antigravity.search <query>` | Search the web using Google Search via Antigravity and display a cited summary. |
+| `/antigravity` | Open the interactive Control Center: compare linked accounts' quota, switch with `Enter`, unlink with `d` then `y`. |
+| `/antigravity models` | Refresh the dynamic model catalog into Pi, then list available runtime models with remaining shared-pool quota and capabilities. |
+| `/antigravity models all` | Include tab/chat models normally hidden from the model list. |
+| `/antigravity doctor` | Show sanitized provider diagnostics, including the endpoint, status, and resolved runtime model. |
+| `/antigravity.usage` | Compatibility alias of `/antigravity`. |
 
 Model availability, entitlement, quota groups, and resets are returned by the service and can differ by account. The quota percentage shown for a model can represent a shared pool, not a private per-model allowance.
 
@@ -127,7 +122,7 @@ All search and analysis requests use Antigravity's fast, high-quota `gemini-3.7-
 
 After you sign in, the provider refreshes its catalog from Antigravity (`fetchAvailableModels`) and groups runtime thinking variants into public Pi model IDs. Newly enabled models — for example a new Gemini Flash generation — become selectable after that refresh without waiting for an extension release. A last-known-good cache is kept for offline/cold start; the static table below is only the conservative fallback and a routing reference.
 
-Use `/antigravity.models` to see live availability and quota for your account. Runtime names such as `gemini-3.8-flash-low` / `-medium` / `-high` collapse to `gemini-3.8-flash` with those thinking levels. The conservative static entries remain selectable when an account's authenticated catalog omits them.
+Use `/antigravity models` to see live availability and quota for your account. Runtime names such as `gemini-3.8-flash-low` / `-medium` / `-high` collapse to `gemini-3.8-flash` with those thinking levels. The conservative static entries remain selectable when an account's authenticated catalog omits them.
 
 ### Why Claude and GPT-OSS appear
 
@@ -189,15 +184,15 @@ Provider requests reuse a keep-alive connection pool when the runtime supports i
 
 ## Troubleshooting
 
-- **No credentials / 401 / 403:** Run `/login antigravity` again, then check `/antigravity.doctor`.
+- **No credentials / 401 / 403:** Run `/login antigravity` again, then check `/antigravity doctor`.
 - **Remote/headless machine — browser can't reach `localhost:51121`:** The callback binds to loopback only, so a browser on another machine can't hit it. You have two options:
   - **Paste (no extra setup):** Run `/login antigravity`, open the shown URL and complete Google sign-in in _any_ browser. When it redirects to `http://localhost:51121/oauth-callback?…` and fails to load, copy that full URL from the address bar and paste it into the prompt Pi shows. The code is single-use and expires quickly, so paste promptly.
   - **SSH tunnel (reusable):** From the machine with the browser, run `ssh -N -L 51121:127.0.0.1:51121 <user>@<server>` and keep it open, then run `/login antigravity` on the server. The redirect to `localhost:51121` tunnels through to the local callback automatically.
 - **OAuth callback will not start:** Ensure port `51121` is free and `ANTIGRAVITY_CALLBACK_HOST` is a permitted loopback address.
-- **Model is unavailable:** Run `/antigravity.models`; availability is account- and service-dependent.
+- **Model is unavailable:** Run `/antigravity models`; availability is account- and service-dependent.
 - **Claude/GPT tool-call schema error:** Upgrade to the latest package release. The provider adapts Pi's JSON Schema tool definitions for the Cloud Code Assist custom-tool bridge.
-- **Quota or rate limit:** Run `/antigravity.usage`. A `429` response usually indicates quota or rate limiting; changing models may still draw from the same shared pool.
-- **Need a safe diagnostic:** `/antigravity.doctor` redacts recognized secrets from its error output. Still review output before sharing it publicly.
+- **Quota or rate limit:** Run `/antigravity`. A `429` response usually indicates quota or rate limiting; changing models may still draw from the same shared pool.
+- **Need a safe diagnostic:** `/antigravity doctor` redacts recognized secrets from its error output. Still review output before sharing it publicly.
 
 ## Development
 

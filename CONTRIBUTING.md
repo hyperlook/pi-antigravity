@@ -6,7 +6,7 @@ Thanks for improving `pi-antigravity`.
 
 - Search existing issues first.
 - Do not report security vulnerabilities in public issues; follow [SECURITY.md](SECURITY.md).
-- Include the Pi version, package version, operating system, selected model, and sanitized `/antigravity.doctor` output when reporting a bug.
+- Include the Pi version, package version, operating system, selected model, and sanitized `/antigravity doctor` output when reporting a bug.
 
 ## Development setup
 

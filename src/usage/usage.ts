@@ -291,7 +291,7 @@ export async function fetchAccountUsage(apiKeyRaw?: string): Promise<AccountUsag
 
 function quotaErrorNote(msg: string): string {
   if (/SUBSCRIPTION_REQUIRED|#3501|(?:lack|missing).*license/i.test(msg)) {
-    return "Aggregate quota summary needs a paid subscription (free-tier can't use that endpoint). Per-model usage is still available via /antigravity.models.";
+    return "Aggregate quota summary needs a paid subscription (free-tier can't use that endpoint). Per-model usage is still available via /antigravity models.";
   }
   return `Aggregate quota summary unavailable: ${msg.slice(0, 160)}`;
 }
@@ -735,33 +735,6 @@ export function formatAccountsDashboard(
     lines.push(l2);
   }
   return lines.join("\n");
-}
-
-export type UsageCommandArgs =
-  | { action: "compare" }
-  | { action: "current" }
-  | { action: "switch"; selector: string }
-  | { action: "remove"; selector: string }
-  | { action: "invalid"; message: string };
-
-const USAGE_HELP = "Usage: /antigravity.usage [current | <index|email> | remove <index|email>]";
-
-export function parseUsageCommand(args: string): UsageCommandArgs {
-  const tokens = args.trim().split(/\s+/).filter(Boolean);
-  if (tokens.length === 0) return { action: "compare" };
-  const [head, ...rest] = tokens;
-  const keyword = head.toLowerCase();
-  if (keyword === "current") {
-    return rest.length === 0 ? { action: "current" } : { action: "invalid", message: USAGE_HELP };
-  }
-  if (keyword === "remove") {
-    const selector = rest.join(" ").trim();
-    return selector
-      ? { action: "remove", selector }
-      : { action: "invalid", message: "Usage: /antigravity.usage remove <index|email>" };
-  }
-  if (rest.length > 0) return { action: "invalid", message: USAGE_HELP };
-  return { action: "switch", selector: head };
 }
 
 export type AccountUsageView = {

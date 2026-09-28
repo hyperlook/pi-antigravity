@@ -7,7 +7,6 @@ import {
   formatQuotaBar,
   formatQuotaCountdown,
   formatUsageSummary,
-  parseUsageCommand,
 } from "../src/usage/usage.js";
 import { expect } from "bun:test";
 
@@ -33,16 +32,6 @@ const out = formatUsageSummary({
 expect(
   out.includes("needs a paid subscription") || out.includes("free-tier can't use that endpoint"),
 ).toBe(true);
-
-expect(parseUsageCommand("").action).toBe("compare");
-expect(parseUsageCommand("current")).toEqual({ action: "current" });
-expect(parseUsageCommand("remove a@example.com")).toEqual({
-  action: "remove",
-  selector: "a@example.com",
-});
-expect(parseUsageCommand("2")).toEqual({ action: "switch", selector: "2" });
-expect(parseUsageCommand("switch 2").action).toBe("invalid");
-expect(parseUsageCommand("remove").action).toBe("invalid");
 
 const comparison = formatAccountsUsage([
   {

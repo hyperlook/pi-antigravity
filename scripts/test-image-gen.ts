@@ -6,7 +6,6 @@ import {
   assertSafeImageModel,
   buildImageGenerateRequest,
   collectImagesFromSse,
-  parseImageCommandArgs,
   resolveImageSavePath,
 } from "../src/image/index.js";
 
@@ -39,16 +38,6 @@ function responseFromChunks(chunks: string[]): Response {
 }
 
 async function main() {
-  const parsed = parseImageCommandArgs("--ratio 16:9 --model gemini-3-pro-image a sunset over mountains");
-  assert(parsed.prompt === "a sunset over mountains", "prompt parsed");
-  assert(parsed.aspectRatio === "16:9", "ratio parsed");
-  assert(parsed.model === "gemini-3-pro-image", "model parsed");
-
-  const withPath = parseImageCommandArgs("--path out/cat.png --ratio 1:1 a cat");
-  assert(withPath.path === "out/cat.png", "path parsed");
-  assert(withPath.prompt === "a cat", "prompt after flags");
-
-  assert(parseImageCommandArgs("").prompt === "", "empty args");
   assert(assertSafeImageModel("gemini-3-pro-image") === "gemini-3-pro-image", "allow gemini image model");
   assert(assertSafeImageModel("imagen-3.0-generate-002") === "imagen-3.0-generate-002", "allow imagen");
   try {
@@ -114,7 +103,7 @@ async function main() {
     await rm(tmp, { recursive: true, force: true });
   }
 
-  console.log("image gen: command parsing, model/path guards, request shape, and SSE parse passed");
+  console.log("image gen: model/path guards, request shape, and SSE parse passed");
 }
 
 void main();
