@@ -42,6 +42,7 @@ import {
   WebSearchSchema,
 } from "./search/index.js";
 import { ANTIGRAVITY_API, streamAntigravity } from "./stream/index.js";
+import { AccountCredentialSource } from "./runtime/index.js";
 import { isKeyRepeat, matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
 import type { AccountUsage } from "./types/types.js";
 import {
@@ -533,6 +534,14 @@ type CompatApiProviderRegistrar = (provider: {
   streamSimple: typeof streamAntigravity;
 }) => void;
 
+const defaultCredentialSource = new AccountCredentialSource();
+
+const boundStreamAntigravity: typeof streamAntigravity = (model, context, options) =>
+  streamAntigravity(model, context, {
+    ...options,
+    credentialSource: options?.credentialSource ?? defaultCredentialSource,
+  });
+
 /**
  * Pi dispatches custom APIs through the compat registry. Oh My Pi does not
  * export `registerApiProvider` and registers the stream inside `registerProvider`.
@@ -543,8 +552,8 @@ function registerCompatApiProvider(): void {
   if (typeof register !== "function") return;
   register({
     api: ANTIGRAVITY_API,
-    stream: streamAntigravity,
-    streamSimple: streamAntigravity,
+    stream: boundStreamAntigravity,
+    streamSimple: boundStreamAntigravity,
   });
 }
 
@@ -565,7 +574,7 @@ export default function (pi: ExtensionAPI): void {
       refreshToken: refreshAndRemember,
       getApiKey,
     },
-    streamSimple: streamAntigravity,
+    streamSimple: boundStreamAntigravity,
   });
 
   pi.registerCommand("antigravity.usage", {

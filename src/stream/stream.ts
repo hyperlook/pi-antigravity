@@ -56,6 +56,7 @@ import { redactSecrets, safeError } from "../utils/security.js";
 import {
   ANTIGRAVITY_API,
   type ActiveBlock,
+  type AntigravityApiKey,
   type AntigravityGenerateRequest,
   type AntigravityStreamOptions,
   type ContentBlock,
@@ -77,7 +78,6 @@ import {
   sanitizeText,
 } from "../utils/util.js";
 import { antigravityFetch, prewarmConnection } from "../utils/http.js";
-import { failoverToNextAccount } from "../auth/accounts.js";
 
 export { ANTIGRAVITY_API };
 
@@ -1438,7 +1438,14 @@ export function streamAntigravity(
     const startTime = Date.now();
     const output = createOutput(model);
     try {
-      let creds = parseApiKey(opts.apiKey);
+      let creds: AntigravityApiKey;
+      if (opts.apiKey) {
+        creds = parseApiKey(opts.apiKey);
+      } else if (opts.credentialSource) {
+        creds = await opts.credentialSource.current();
+      } else {
+        creds = parseApiKey(undefined);
+      }
       const triedAccessTokens = new Set<string>([creds.token]);
       const primaryEndpoint = endpointCandidates()[0];
       if (primaryEndpoint) prewarmConnection(primaryEndpoint);
@@ -1580,7 +1587,7 @@ export function streamAntigravity(
           }
           const friendly = friendlyAntigravityError(response?.status, lastText);
           if (response?.status === 429 && /Quota reached\./i.test(friendly)) {
-            const next = await failoverToNextAccount(triedAccessTokens);
+            const next = await opts.credentialSource?.rotate(triedAccessTokens);
             if (next) {
               triedAccessTokens.add(next.token);
               creds = next;

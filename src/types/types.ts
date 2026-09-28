@@ -44,8 +44,15 @@ export type AntigravityRouting = {
 export const ANTIGRAVITY_API = "antigravity-api" as const;
 export type AntigravityApi = typeof ANTIGRAVITY_API;
 
+export interface CredentialSource {
+  current(): Promise<AntigravityApiKey>;
+  /** Call only on a hard quota wall. Returns undefined when exhausted. */
+  rotate(excluded: ReadonlySet<string>): Promise<AntigravityApiKey | undefined>;
+}
+
 export type AntigravityStreamOptions = Omit<SimpleStreamOptions, "toolChoice"> & {
   toolChoice?: ToolChoice;
+  credentialSource?: CredentialSource;
 };
 
 export type GeminiTextPart = { text: string; thoughtSignature?: string };

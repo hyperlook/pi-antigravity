@@ -15,6 +15,7 @@ export type { OAuthCredentials, OAuthLoginCallbacks } from "./oauth.js";
 export {
   activateAccount,
   failoverToNextAccount,
+  getActiveApiKey,
   listAccounts,
   readAccountApiKeys,
   rememberAccount,

@@ -261,12 +261,38 @@ async function ensureFresh(account: StoredAccount): Promise<StoredAccount> {
   return accountFromCredentials(await refreshAntigravityToken(account), account);
 }
 
-function apiKeyFor(account: StoredAccount): AntigravityApiKey {
+export function apiKeyFor(account: StoredAccount): AntigravityApiKey {
   const email = account.email?.trim();
   return {
     token: account.access,
     projectId: account.projectId || defaultProjectId(email || "antigravity-default"),
   };
+}
+
+export async function getActiveApiKey(): Promise<AntigravityApiKey> {
+  syncCurrentAuth();
+  const store = loadAccountStore();
+  const activeId = store.activeAccountId;
+  const active = activeId ? store.accounts[activeId] : undefined;
+  if (active) {
+    const fresh = await ensureFresh(active);
+    if (fresh !== active) {
+      store.accounts[fresh.accountId] = fresh;
+      saveAccountStore(store);
+      writeActiveCredential(fresh);
+    }
+    return apiKeyFor(fresh);
+  }
+  const fallback = sortedAccounts(store)[0];
+  if (fallback) {
+    const fresh = await ensureFresh(fallback);
+    store.accounts[fresh.accountId] = fresh;
+    store.activeAccountId = fresh.accountId;
+    saveAccountStore(store);
+    writeActiveCredential(fresh);
+    return apiKeyFor(fresh);
+  }
+  throw new Error("No Antigravity OAuth credentials found. Run /login antigravity.");
 }
 
 /**
