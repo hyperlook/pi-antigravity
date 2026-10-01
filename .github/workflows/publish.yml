@@ -71,7 +71,16 @@ jobs:
           "
 
       - name: Publish to npm
-        run: npm publish --access public --tag ${{ steps.dist_tag.outputs.tag }}
+        run: |
+          PKG_NAME=$(bun -e "console.log(require('./package.json').name)")
+          PKG_VERSION=$(bun -e "console.log(require('./package.json').version)")
+          echo "Checking whether $PKG_NAME@$PKG_VERSION is already published on npm..."
+          if npm view "$PKG_NAME@$PKG_VERSION" version >/dev/null 2>&1; then
+            echo "::notice ::Version $PKG_NAME@$PKG_VERSION is already published on npm. Skipping publish step."
+          else
+            echo "Publishing $PKG_NAME@$PKG_VERSION with tag ${{ steps.dist_tag.outputs.tag }}..."
+            npm publish --access public --tag ${{ steps.dist_tag.outputs.tag }}
+          fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -80,6 +89,10 @@ jobs:
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         run: |
-          gh release create "${{ github.ref_name }}" --generate-notes --title "${{ github.ref_name }}"
+          if gh release view "${{ github.ref_name }}" >/dev/null 2>&1; then
+            echo "::notice ::GitHub Release for ${{ github.ref_name }} already exists. Skipping release creation."
+          else
+            gh release create "${{ github.ref_name }}" --generate-notes --title "${{ github.ref_name }}"
+          fi
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
