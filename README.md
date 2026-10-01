@@ -1,5 +1,6 @@
 # pi-antigravity
 
+[![npm version](https://img.shields.io/npm/v/@gwylook/pi-antigravity.svg)](https://www.npmjs.com/package/@gwylook/pi-antigravity)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 **pi-antigravity** is an enhanced [Pi Coding Agent](https://pi.dev) provider for Google Antigravity / Cloud Code Assist models (Gemini, Claude, and GPT-OSS) featuring native Google Grounding search tools, seamless multi-account auto-failover, and direct OAuth authentication.
@@ -22,23 +23,38 @@
 
 ## Requirements
 
-- Pi Coding Agent and Pi AI version **0.86.0 or later**
+- Pi Coding Agent and Pi AI version **0.87.0 or later**
 - A Google account that can use the relevant Cloud Code Assist / Antigravity services
 - A browser to complete the Google sign-in. Same-machine is best (the browser hits the local callback automatically); on a remote/headless machine, complete sign-in anywhere and paste the resulting callback URL back into Pi (see [Troubleshooting](#troubleshooting)).
 
 ## Install
 
-Install the package directly from GitHub:
+Install the package via npm (recommended):
 
 ```bash
-pi install git:github.com/hyperlook/pi-antigravity
+pi install npm:@gwylook/pi-antigravity
+```
+
+To install or lock to a specific version (e.g. matching Pi 0.87.x):
+
+```bash
+pi install npm:@gwylook/pi-antigravity@^0.87.0
 ```
 
 Restart Pi (or run `/reload`) after installation. To update later:
 
 ```bash
-pi update git:github.com/hyperlook/pi-antigravity
+pi update npm:@gwylook/pi-antigravity
 ```
+
+<details>
+<summary>Alternative: Install from GitHub source</summary>
+
+```bash
+pi install git:github.com/hyperlook/pi-antigravity
+```
+
+</details>
 
 ## Quick start
 
