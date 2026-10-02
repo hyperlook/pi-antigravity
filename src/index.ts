@@ -11,8 +11,11 @@ import {
 } from "./auth/index.js";
 import { DEFAULT_ENDPOINT } from "./client/index.js";
 import { registerAntigravityCommands } from "./commands/index.js";
+import { generateAntigravityImages } from "./image/index.js";
 import {
+  ANTIGRAVITY_IMAGE_API,
   getCurrentAntigravityCatalog,
+  listProviderModels,
   PROVIDER_ID,
   PROVIDER_NAME,
   refreshAntigravityModels,
@@ -74,8 +77,14 @@ export default function (pi: ExtensionAPI): void {
     name: PROVIDER_NAME,
     baseUrl: DEFAULT_ENDPOINT,
     api: ANTIGRAVITY_API,
-    models: getCurrentAntigravityCatalog().models,
+    models: listProviderModels(getCurrentAntigravityCatalog()),
     refreshModels: refreshAntigravityModels,
+    // Hosts that predate Pi 1.0 ignore this. generate_image then calls the local transport.
+    images: {
+      [ANTIGRAVITY_IMAGE_API]: {
+        generateImages: generateAntigravityImages,
+      },
+    },
     oauth: {
       name: PROVIDER_NAME,
       login: loginAndRemember,

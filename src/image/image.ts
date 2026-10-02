@@ -1,13 +1,18 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import type {
+  AssistantImages,
+  ImageApi,
+  ImageModel,
+  ImagesContext,
+  ImagesOptions,
+} from "@earendil-works/pi-ai";
+import { streamGenerateContent, type StreamGenerateChunk } from "../client/stream-generate.js";
 import {
-  antigravityHeaders,
-  endpointCandidates,
-  jsonOrTextError,
-  parseApiKey,
-} from "../client/client.js";
-import { antigravityFetch } from "../utils/http.js";
-import { safeError } from "../utils/security.js";
+  ANTIGRAVITY_IMAGE_API,
+  ANTIGRAVITY_IMAGE_MODELS,
+  isAntigravityImageModelId,
+} from "../models/image-catalog.js";
 import { antigravityRequestEnvelope, sanitizeText } from "../utils/util.js";
 
 export const DEFAULT_IMAGE_MODEL = "gemini-3-pro-image";
@@ -25,9 +30,14 @@ export const IMAGE_ASPECT_RATIOS = [
 ] as const;
 export type ImageAspectRatio = (typeof IMAGE_ASPECT_RATIOS)[number];
 
-const IMAGE_MODEL_FALLBACKS = [
+/**
+ * Tool-only preference order, seeded from the image catalog so the two lists
+ * cannot drift. The provider operation must not substitute models.
+ */
+export const IMAGE_MODEL_CANDIDATES: readonly string[] = [
   DEFAULT_IMAGE_MODEL,
-  "gemini-3.1-flash-image",
+  ...ANTIGRAVITY_IMAGE_MODELS.map((model) => model.id).filter((id) => id !== DEFAULT_IMAGE_MODEL),
+  // Advertised as a preview only; discovery may not have registered it yet.
   "gemini-3-pro-image-preview",
 ];
 const IMAGE_SYSTEM_INSTRUCTION =
@@ -37,11 +47,14 @@ const MAX_PROMPT_CHARS = 8000;
 
 export type GeneratedImage = { data: string; mimeType: string };
 
+export type ImageRequestPart =
+  { text: string } | { inlineData: { mimeType: string; data: string } };
+
 export type ImageGenerateRequest = {
   project: string;
   model: string;
   request: {
-    contents: Array<{ role: "user"; parts: Array<{ text: string }> }>;
+    contents: Array<{ role: "user"; parts: ImageRequestPart[] }>;
     systemInstruction: { role: "user"; parts: Array<{ text: string }> };
     generationConfig: {
       imageConfig: { aspectRatio: string };
@@ -51,42 +64,6 @@ export type ImageGenerateRequest = {
   requestType: "agent";
   userAgent: "antigravity";
   requestId: string;
-};
-
-export type ImagePromptOptions = {
-  prompt: string;
-  aspectRatio?: string;
-  model?: string;
-  path?: string;
-};
-
-export type GenerateImageOptions = ImagePromptOptions & {
-  apiKey: string;
-  cwd: string;
-  signal?: AbortSignal;
-};
-
-export type GenerateImageResult = {
-  images: GeneratedImage[];
-  savedPaths: string[];
-  text: string[];
-  model: string;
-};
-
-type ImageStreamChunk = {
-  error?: { message?: string };
-  response?: {
-    candidates?: Array<{
-      content?: {
-        parts?: Array<{ text?: string; inlineData?: { mimeType?: string; data?: string } }>;
-      };
-    }>;
-  };
-  candidates?: Array<{
-    content?: {
-      parts?: Array<{ text?: string; inlineData?: { mimeType?: string; data?: string } }>;
-    };
-  }>;
 };
 
 function imageExtension(mimeType: string): string {
@@ -99,10 +76,7 @@ function imageExtension(mimeType: string): string {
 
 export function assertSafeImageModel(modelId: string): string {
   const id = modelId.trim();
-  if (id.length === 0 || id.length > 80) {
-    throw new Error("Unsupported image model id.");
-  }
-  if (!/^(gemini-[a-z0-9.+-]*image[a-z0-9.+-]*|imagen-[a-z0-9.+-]+)$/i.test(id)) {
+  if (!isAntigravityImageModelId(id)) {
     throw new Error(`Unsupported image model: ${id}`);
   }
   return id;
@@ -142,27 +116,54 @@ export function resolveImageSavePath(
   return `${target.slice(0, -currentExt.length)}${suffix}${currentExt}`;
 }
 
+export function imageModelCandidates(preferred?: string): string[] {
+  const id = assertSafeImageModel(preferred?.trim() || DEFAULT_IMAGE_MODEL);
+  return [id, ...IMAGE_MODEL_CANDIDATES.filter((candidate) => candidate !== id)];
+}
+
+export function inlineImageData(
+  data: string,
+  mimeType = "image/png",
+): { mimeType: string; data: string } {
+  const match = data.match(/^data:([^;]+);base64,(.+)$/s);
+  if (!match) return { mimeType, data: data.trim() };
+  return { mimeType: match[1] || mimeType, data: match[2].trim() };
+}
+
+function imageRequestBody(
+  prompt: string,
+  aspectRatio: string,
+  images: Array<{ data: string; mimeType: string }>,
+): ImageGenerateRequest["request"] {
+  const parts: ImageRequestPart[] = [{ text: sanitizeText(prompt) }];
+  for (const image of images) {
+    parts.push({ inlineData: inlineImageData(image.data, image.mimeType) });
+  }
+  return {
+    contents: [{ role: "user", parts }],
+    systemInstruction: {
+      role: "user",
+      parts: [{ text: IMAGE_SYSTEM_INSTRUCTION }],
+    },
+    generationConfig: {
+      imageConfig: { aspectRatio },
+      candidateCount: 1,
+    },
+  };
+}
+
 export function buildImageGenerateRequest(
   prompt: string,
   model: string,
   projectId: string,
   aspectRatio: string,
+  images: Array<{ data: string; mimeType: string }> = [],
 ): ImageGenerateRequest {
   const envelope = antigravityRequestEnvelope(model, false);
   return {
     project: projectId,
     model,
-    request: {
-      contents: [{ role: "user", parts: [{ text: sanitizeText(prompt) }] }],
-      systemInstruction: {
-        role: "user",
-        parts: [{ text: IMAGE_SYSTEM_INSTRUCTION }],
-      },
-      generationConfig: {
-        imageConfig: { aspectRatio },
-        candidateCount: 1,
-      },
-    },
+    request: imageRequestBody(prompt, aspectRatio, images),
     requestType: "agent",
     userAgent: "antigravity",
     requestId: envelope.requestId,
@@ -185,122 +186,209 @@ function collectImagesFromParts(
   }
 }
 
-export async function collectImagesFromSse(
-  response: Response,
-  signal?: AbortSignal,
-): Promise<{ images: GeneratedImage[]; text: string[] }> {
-  if (!response.body) throw new Error("No response body");
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  const images: GeneratedImage[] = [];
-  const text: string[] = [];
-  try {
-    while (true) {
-      if (signal?.aborted) throw new Error("Request was aborted");
-      const result = await reader.read();
-      if (result.done) break;
-      if (!(result.value instanceof Uint8Array)) continue;
-      buffer += decoder.decode(result.value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() || "";
-      for (const line of lines) {
-        if (!line.startsWith("data:")) continue;
-        const json = line.slice(5).trim();
-        if (!json || json === "[DONE]") continue;
-        let chunk: ImageStreamChunk;
-        try {
-          chunk = JSON.parse(json) as ImageStreamChunk;
-        } catch {
-          continue;
-        }
-        if (chunk.error?.message) throw new Error(chunk.error.message);
-        const responseData = chunk.response || chunk;
-        for (const candidate of responseData.candidates || []) {
-          collectImagesFromParts(candidate.content?.parts, images, text);
-        }
-      }
-    }
-  } finally {
-    reader.releaseLock();
-  }
-  return { images, text };
-}
-
 async function writeImage(filePath: string, image: GeneratedImage): Promise<string> {
   await mkdir(dirname(filePath), { recursive: true });
   await writeFile(filePath, Buffer.from(image.data, "base64"));
   return filePath;
 }
 
-export async function generateAntigravityImage(
-  options: GenerateImageOptions,
-): Promise<GenerateImageResult> {
-  const prompt = options.prompt.trim();
-  if (!prompt) throw new Error("Image prompt is required.");
-  if (prompt.length > MAX_PROMPT_CHARS) {
-    throw new Error(`Image prompt is too long (max ${MAX_PROMPT_CHARS} characters).`);
-  }
-  const aspectRatio = assertSafeAspectRatio(options.aspectRatio || "1:1");
-  const preferred = assertSafeImageModel(options.model || DEFAULT_IMAGE_MODEL);
-  const models = [preferred, ...IMAGE_MODEL_FALLBACKS.filter((id) => id !== preferred)];
-  const creds = parseApiKey(options.apiKey);
-  const headers = antigravityHeaders(creds.token);
-
-  let lastError = "no endpoint available";
-  for (const model of models) {
-    const body = JSON.stringify(
-      buildImageGenerateRequest(prompt, model, creds.projectId, aspectRatio),
+export async function saveGeneratedImages(
+  cwd: string,
+  images: GeneratedImage[],
+  requestedPath?: string,
+): Promise<string[]> {
+  const saved: string[] = [];
+  const many = images.length > 1;
+  for (const [index, image] of images.entries()) {
+    saved.push(
+      await writeImage(
+        resolveImageSavePath(cwd, requestedPath, image.mimeType, many ? index : undefined),
+        image,
+      ),
     );
-    for (const endpoint of endpointCandidates()) {
-      if (options.signal?.aborted) throw new Error("Request was aborted");
-      try {
-        const response = await antigravityFetch(
-          `${endpoint}/v1internal:streamGenerateContent?alt=sse`,
-          {
-            method: "POST",
-            headers,
-            body,
-            signal: options.signal,
-          },
-        );
-        if (!response.ok) {
-          lastError = jsonOrTextError(await response.text()).slice(0, 400);
-          if (response.status === 404 || [403, 429, 500, 502, 503, 504].includes(response.status)) {
-            continue;
-          }
-          throw new Error(
-            `Antigravity image request failed (${response.status}): ${safeError(lastError)}`,
-          );
-        }
-        const parsed = await collectImagesFromSse(response, options.signal);
-        if (!parsed.images.length) {
-          lastError = parsed.text.join(" ").trim() || "No image data returned.";
-          continue;
-        }
-        const savedPaths: string[] = [];
-        const many = parsed.images.length > 1;
-        for (const [index, image] of parsed.images.entries()) {
-          savedPaths.push(
-            await writeImage(
-              resolveImageSavePath(
-                options.cwd,
-                options.path,
-                image.mimeType,
-                many ? index : undefined,
-              ),
-              image,
-            ),
-          );
-        }
-        return { images: parsed.images, savedPaths, text: parsed.text, model };
-      } catch (error) {
-        lastError = safeError(error);
-        if (options.signal?.aborted) {
-          throw new Error("Request was aborted", { cause: error });
-        }
-      }
+  }
+  return saved;
+}
+
+export type ImageRequestResult =
+  | { ok: true; images: GeneratedImage[]; text: string[]; model: string }
+  | { ok: false; aborted: boolean; message: string };
+
+function imagesFromChunks(chunks: StreamGenerateChunk[]): {
+  images: GeneratedImage[];
+  text: string[];
+} {
+  const images: GeneratedImage[] = [];
+  const text: string[] = [];
+  for (const chunk of chunks) {
+    for (const candidate of chunk.candidates ?? []) {
+      const content = candidate.content;
+      if (!content || typeof content !== "object") continue;
+      const parts = (content as { parts?: unknown }).parts;
+      if (!Array.isArray(parts)) continue;
+      collectImagesFromParts(
+        parts as Array<{ text?: string; inlineData?: { mimeType?: string; data?: string } }>,
+        images,
+        text,
+      );
     }
   }
-  throw new Error(`Antigravity image generation failed: ${safeError(lastError)}`);
+  return { images, text };
 }
+
+function aspectRatioFromMetadata(
+  metadata: Record<string, unknown> | undefined,
+  explicit?: string,
+): { ok: true; ratio: ImageAspectRatio } | { ok: false; message: string } {
+  const raw = explicit ?? metadata?.aspectRatio;
+  if (raw === undefined || raw === "") return { ok: true, ratio: "1:1" };
+  if (typeof raw !== "string") return { ok: false, message: "aspectRatio must be a string." };
+  try {
+    return { ok: true, ratio: assertSafeAspectRatio(raw) };
+  } catch (error) {
+    return {
+      ok: false,
+      message: error instanceof Error ? error.message : "Unsupported aspect ratio.",
+    };
+  }
+}
+
+/**
+ * One named model. Does not throw and does not try another model.
+ * Callers that want a preference order, including `generate_image`, own that loop.
+ */
+export async function requestAntigravityImage(options: {
+  apiKey: string;
+  model: string;
+  prompt: string;
+  aspectRatio?: string;
+  images?: Array<{ data: string; mimeType: string }>;
+  signal?: AbortSignal;
+}): Promise<ImageRequestResult> {
+  const prompt = options.prompt.trim();
+  if (!prompt) return { ok: false, aborted: false, message: "Image prompt is required." };
+  if (prompt.length > MAX_PROMPT_CHARS) {
+    return {
+      ok: false,
+      aborted: false,
+      message: `Image prompt is too long (max ${MAX_PROMPT_CHARS} characters).`,
+    };
+  }
+  let model: string;
+  try {
+    model = assertSafeImageModel(options.model);
+  } catch (error) {
+    return {
+      ok: false,
+      aborted: false,
+      message: error instanceof Error ? error.message : "Unsupported image model.",
+    };
+  }
+  const ratio = aspectRatioFromMetadata(undefined, options.aspectRatio);
+  if (!ratio.ok) return { ok: false, aborted: false, message: ratio.message };
+
+  const streamed = await streamGenerateContent({
+    apiKey: options.apiKey,
+    model,
+    request: imageRequestBody(prompt, ratio.ratio, options.images ?? []),
+    signal: options.signal,
+  });
+  if (!streamed.ok) {
+    return { ok: false, aborted: streamed.aborted, message: streamed.message };
+  }
+  const parsed = imagesFromChunks(streamed.chunks);
+  if (!parsed.images.length) {
+    return {
+      ok: false,
+      aborted: false,
+      message: parsed.text.join(" ").trim() || "No image data returned.",
+    };
+  }
+  return { ok: true, images: parsed.images, text: parsed.text, model: streamed.model };
+}
+
+function imageResult(
+  model: ImageModel<ImageApi>,
+  partial: Pick<AssistantImages, "output" | "stopReason" | "errorMessage">,
+): AssistantImages {
+  return {
+    api: model.api || ANTIGRAVITY_IMAGE_API,
+    provider: model.provider || "antigravity",
+    model: model.id,
+    output: partial.output,
+    stopReason: partial.stopReason,
+    errorMessage: partial.errorMessage,
+    timestamp: Date.now(),
+  };
+}
+
+function inputBlocks(context: ImagesContext): {
+  prompt: string;
+  images: Array<{ data: string; mimeType: string }>;
+} {
+  const texts: string[] = [];
+  const images: Array<{ data: string; mimeType: string }> = [];
+  for (const block of context.input) {
+    if (block.type === "text" && block.text.trim()) texts.push(block.text);
+    if (block.type === "image" && block.data.trim()) {
+      images.push({ data: block.data, mimeType: block.mimeType || "image/png" });
+    }
+  }
+  return { prompt: texts.join("\n").trim(), images };
+}
+
+/** Pi image operation. Never throws. Uses the model the caller named. */
+export async function generateAntigravityImages(
+  model: ImageModel<ImageApi>,
+  context: ImagesContext,
+  options?: ImagesOptions,
+): Promise<AssistantImages> {
+  try {
+    if (options?.signal?.aborted) {
+      return imageResult(model, {
+        output: [],
+        stopReason: "aborted",
+        errorMessage: "Request was aborted",
+      });
+    }
+    const ratio = aspectRatioFromMetadata(options?.metadata);
+    if (!ratio.ok) {
+      return imageResult(model, { output: [], stopReason: "error", errorMessage: ratio.message });
+    }
+    const input = inputBlocks(context);
+    const requested = await requestAntigravityImage({
+      apiKey: options?.apiKey ?? "",
+      model: model.id,
+      prompt: input.prompt,
+      aspectRatio: ratio.ratio,
+      images: input.images,
+      signal: options?.signal,
+    });
+    if (!requested.ok) {
+      return imageResult(model, {
+        output: [],
+        stopReason: requested.aborted ? "aborted" : "error",
+        errorMessage: requested.message,
+      });
+    }
+    return imageResult(model, {
+      output: [
+        ...requested.text.map((text) => ({ type: "text" as const, text })),
+        ...requested.images.map((image) => ({
+          type: "image" as const,
+          data: image.data,
+          mimeType: image.mimeType,
+        })),
+      ],
+      stopReason: "stop",
+    });
+  } catch (error) {
+    return imageResult(model, {
+      output: [],
+      stopReason: options?.signal?.aborted ? "aborted" : "error",
+      errorMessage: error instanceof Error ? error.message : "Image generation failed.",
+    });
+  }
+}
+
+

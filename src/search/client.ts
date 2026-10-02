@@ -56,6 +56,9 @@ interface StreamCandidateChunk {
   }>;
 }
 
+// SSE loop is still local so this change does not alter search behavior.
+// Adopt `streamGenerateContent` from `../client/stream-generate.ts` (pass `tools`
+// and `onChunk`); keep grounding, citations, and YouTube handling in this module.
 export async function executeAntigravitySearchStream(options: {
   apiKey: string;
   contents: SearchContent[];

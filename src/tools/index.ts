@@ -2,8 +2,12 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { StringEnum, Type } from "@earendil-works/pi-ai";
 import {
   DEFAULT_IMAGE_MODEL,
-  generateAntigravityImage,
+  imageModelCandidates,
+  requestAntigravityImage,
+  resolveImageSavePath,
+  saveGeneratedImages,
   IMAGE_ASPECT_RATIOS,
+  type GeneratedImage,
 } from "../image/index.js";
 import {
   executeUrlContext,
@@ -14,6 +18,38 @@ import {
 
 const NO_CREDENTIALS = "No Antigravity credentials. Run /login antigravity first.";
 
+type PreferredImage = { images: GeneratedImage[]; text: string[]; model: string };
+
+/**
+ * Preference order for the tool only. `generateAntigravityImages` is the Pi 1.0
+ * provider operation and never substitutes models; the file path, the aspect
+ * ratio, and the fallback loop live here.
+ */
+async function generateWithPreference(options: {
+  apiKey: string;
+  prompt: string;
+  aspectRatio?: string;
+  model?: string;
+  signal?: AbortSignal;
+}): Promise<PreferredImage> {
+  let lastError = "Antigravity image generation failed.";
+  for (const id of imageModelCandidates(options.model)) {
+    const attempted = await requestAntigravityImage({
+      apiKey: options.apiKey,
+      model: id,
+      prompt: options.prompt,
+      aspectRatio: options.aspectRatio,
+      signal: options.signal,
+    });
+    if (attempted.ok) {
+      return { images: attempted.images, text: attempted.text, model: attempted.model };
+    }
+    if (attempted.aborted) throw new Error("Request was aborted");
+    lastError = attempted.message;
+  }
+  throw new Error(`Antigravity image generation failed: ${lastError}`);
+}
+
 export function registerAntigravityTools(pi: ExtensionAPI): void {
   pi.registerTool({
     name: "generate_image",
@@ -23,6 +59,7 @@ export function registerAntigravityTools(pi: ExtensionAPI): void {
     promptSnippet: "Generate images via Antigravity OAuth (Gemini image models)",
     promptGuidelines: [
       "Use generate_image when the user asks to create, draw, or generate an image.",
+      "generate_image saves the file and accepts aspectRatio. models.generateImages can call the same Antigravity image models when codemode is on, including with reference images, but that path neither saves files nor sets a ratio.",
     ],
     parameters: Type.Object({
       prompt: Type.String({ description: "Image description." }),
@@ -41,22 +78,22 @@ export function registerAntigravityTools(pi: ExtensionAPI): void {
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
       const apiKey = await ctx.modelRegistry.getApiKeyForProvider("antigravity");
       if (!apiKey) throw new Error(NO_CREDENTIALS);
+      if (params.path) resolveImageSavePath(ctx.cwd, params.path);
       onUpdate?.({ content: [{ type: "text", text: "Generating image…" }], details: {} });
-      const result = await generateAntigravityImage({
+      const result = await generateWithPreference({
         apiKey,
-        cwd: ctx.cwd,
         prompt: params.prompt,
         aspectRatio: params.aspectRatio,
         model: params.model,
-        path: params.path,
         signal,
       });
+      const savedPaths = await saveGeneratedImages(ctx.cwd, result.images, params.path);
       const notes = result.text.join(" ").trim();
       return {
         content: [
           {
             type: "text" as const,
-            text: `Saved image to ${result.savedPaths.join(", ")}${notes ? `. ${notes}` : ""}`,
+            text: `Saved image to ${savedPaths.join(", ")}${notes ? `. ${notes}` : ""}`,
           },
           ...result.images.map((image) => ({
             type: "image" as const,
@@ -64,7 +101,7 @@ export function registerAntigravityTools(pi: ExtensionAPI): void {
             mimeType: image.mimeType,
           })),
         ],
-        details: { model: result.model, savedPaths: result.savedPaths },
+        details: { model: result.model, savedPaths },
       };
     },
   });

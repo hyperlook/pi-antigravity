@@ -1,0 +1,200 @@
+import { AntigravityRequestType, AntigravityUserAgent } from "../types/enums.js";
+import { antigravityFetch } from "../utils/http.js";
+import { safeError } from "../utils/security.js";
+import { antigravityRequestEnvelope, isRecord } from "../utils/util.js";
+import { antigravityHeaders, endpointCandidates, jsonOrTextError, parseApiKey } from "./client.js";
+
+/**
+ * One Cloud Code `streamGenerateContent` call.
+ *
+ * Owns the envelope, endpoint fallback, and SSE framing. It does not choose a
+ * model, rotate accounts, or interpret candidates. Image generation calls this.
+ * `web_search` and `url_context` still duplicate the loop in `src/search/client.ts`;
+ * the next change should pass `tools` and `onChunk` here and leave grounding,
+ * citations, and YouTube handling in `src/search/`.
+ */
+export const STREAM_GENERATE_CONTENT_PATH = "/v1internal:streamGenerateContent?alt=sse";
+
+/** Statuses that may be tried against the next endpoint. Non-members stop the loop. */
+export const RETRYABLE_STREAM_STATUSES = [403, 404, 429, 500, 502, 503, 504] as const;
+
+export type StreamGenerateRequest = {
+  contents: Array<{ role: string; parts: Array<Record<string, unknown>> }>;
+  systemInstruction?: { role: string; parts: Array<{ text: string }> };
+  tools?: unknown[];
+  generationConfig?: Record<string, unknown>;
+};
+
+export type StreamGenerateChunk = {
+  error?: { message?: string; code?: number; status?: string };
+  candidates?: Array<Record<string, unknown>>;
+  [key: string]: unknown;
+};
+
+export type StreamGenerateSuccess = {
+  ok: true;
+  model: string;
+  endpoint: string;
+  chunks: StreamGenerateChunk[];
+};
+
+export type StreamGenerateFailure = {
+  ok: false;
+  aborted: boolean;
+  status?: number;
+  message: string;
+  chunks: StreamGenerateChunk[];
+};
+
+export type StreamGenerateResult = StreamGenerateSuccess | StreamGenerateFailure;
+
+export function isRetryableStreamStatus(status: number): boolean {
+  return (RETRYABLE_STREAM_STATUSES as readonly number[]).includes(status);
+}
+
+function abortedResult(chunks: StreamGenerateChunk[] = []): StreamGenerateFailure {
+  return { ok: false, aborted: true, message: "Request was aborted", chunks };
+}
+
+function failure(
+  message: string,
+  extra?: { status?: number; chunks?: StreamGenerateChunk[] },
+): StreamGenerateFailure {
+  return {
+    ok: false,
+    aborted: false,
+    status: extra?.status,
+    message,
+    chunks: extra?.chunks ?? [],
+  };
+}
+
+function normalizeChunk(parsed: unknown): StreamGenerateChunk | undefined {
+  if (!isRecord(parsed)) return undefined;
+  const nested = isRecord(parsed.response) ? parsed.response : undefined;
+  const source = nested ?? parsed;
+  const rawCandidates = source.candidates;
+  const candidates = Array.isArray(rawCandidates) ? rawCandidates.filter(isRecord) : undefined;
+  const errorSource = isRecord(parsed.error)
+    ? parsed.error
+    : isRecord(source.error)
+      ? source.error
+      : undefined;
+  const error = errorSource
+    ? {
+        message: typeof errorSource.message === "string" ? errorSource.message : undefined,
+        code: typeof errorSource.code === "number" ? errorSource.code : undefined,
+        status: typeof errorSource.status === "string" ? errorSource.status : undefined,
+      }
+    : undefined;
+  return {
+    ...parsed,
+    ...(candidates ? { candidates } : {}),
+    ...(error ? { error } : {}),
+  };
+}
+
+async function readSse(
+  response: Response,
+  signal: AbortSignal | undefined,
+  onChunk: ((chunk: StreamGenerateChunk) => void) | undefined,
+): Promise<{ chunks: StreamGenerateChunk[]; error?: string; aborted?: boolean }> {
+  if (!response.body) return { chunks: [], error: "No response body" };
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  const chunks: StreamGenerateChunk[] = [];
+  try {
+    while (true) {
+      if (signal?.aborted) return { chunks, aborted: true };
+      const result = await reader.read();
+      if (result.done) break;
+      if (!(result.value instanceof Uint8Array)) continue;
+      buffer += decoder.decode(result.value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+      for (const line of lines) {
+        if (!line.startsWith("data:")) continue;
+        const json = line.slice(5).trim();
+        if (!json || json === "[DONE]") continue;
+        let parsed: unknown;
+        try {
+          parsed = JSON.parse(json);
+        } catch {
+          continue;
+        }
+        const chunk = normalizeChunk(parsed);
+        if (!chunk) continue;
+        chunks.push(chunk);
+        onChunk?.(chunk);
+        if (chunk.error) {
+          const message = chunk.error.message || JSON.stringify(chunk.error);
+          const code = chunk.error.code || chunk.error.status || "unknown";
+          return { chunks, error: `Antigravity API error (${code}): ${message}` };
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return { chunks };
+}
+
+export async function streamGenerateContent(options: {
+  apiKey: string;
+  model: string;
+  request: StreamGenerateRequest;
+  signal?: AbortSignal;
+  /** Search and URL context can stream text from here. Image generation can ignore it. */
+  onChunk?: (chunk: StreamGenerateChunk) => void;
+}): Promise<StreamGenerateResult> {
+  if (options.signal?.aborted) return abortedResult();
+
+  let creds: ReturnType<typeof parseApiKey>;
+  try {
+    creds = parseApiKey(options.apiKey);
+  } catch (error) {
+    return failure(safeError(error));
+  }
+
+  const envelope = antigravityRequestEnvelope(options.model, false);
+  const body = JSON.stringify({
+    project: creds.projectId,
+    model: options.model,
+    request: options.request,
+    requestType: AntigravityRequestType.Agent,
+    userAgent: AntigravityUserAgent.Antigravity,
+    requestId: envelope.requestId,
+  });
+  const headers = {
+    ...antigravityHeaders(creds.token),
+    Accept: "text/event-stream",
+  };
+
+  let last = failure("No Antigravity endpoint available");
+  for (const endpoint of endpointCandidates()) {
+    if (options.signal?.aborted) return abortedResult();
+    try {
+      const response = await antigravityFetch(`${endpoint}${STREAM_GENERATE_CONTENT_PATH}`, {
+        method: "POST",
+        headers,
+        body,
+        signal: options.signal,
+      });
+      if (!response.ok) {
+        const message = jsonOrTextError(await response.text()).slice(0, 400);
+        last = failure(message, { status: response.status });
+        if (isRetryableStreamStatus(response.status)) continue;
+        return last;
+      }
+      const parsed = await readSse(response, options.signal, options.onChunk);
+      if (parsed.aborted) return abortedResult(parsed.chunks);
+      if (parsed.error) return failure(parsed.error, { chunks: parsed.chunks });
+      return { ok: true, model: options.model, endpoint, chunks: parsed.chunks };
+    } catch (error) {
+      if (options.signal?.aborted) return abortedResult();
+      last = failure(safeError(error));
+    }
+  }
+  return last;
+}
