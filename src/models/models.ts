@@ -2,6 +2,7 @@ import type { ProviderModelConfig } from "@earendil-works/pi-coding-agent";
 import type { AntigravityRouting, ThinkingWire } from "../types/types.js";
 import { ThinkingEffort } from "../types/enums.js";
 import type { AntigravityCatalog } from "./grouping.js";
+import { ANTIGRAVITY_IMAGE_MODELS } from "./image-catalog.js";
 
 export const PROVIDER_ID = "antigravity";
 export const PROVIDER_NAME = "Antigravity";
@@ -236,7 +237,10 @@ const thinkingLevelMaps = {
     xhigh: null,
     max: null,
   },
-} satisfies Record<string, ProviderModelConfig["thinkingLevelMap"]>;
+} satisfies Record<
+  string,
+  Extract<ProviderModelConfig, { reasoning: boolean }>["thinkingLevelMap"]
+>;
 
 /** Same set as `agy models`, collapsed to public Pi model IDs. */
 export const ANTIGRAVITY_MODELS: ProviderModelConfig[] = [
@@ -331,6 +335,7 @@ export const ANTIGRAVITY_MODELS: ProviderModelConfig[] = [
 
 let currentModels: ProviderModelConfig[] = ANTIGRAVITY_MODELS;
 let currentRouting: Record<string, AntigravityRouting> = { ...ANTIGRAVITY_ROUTING };
+let currentImageModels: ProviderModelConfig[] = ANTIGRAVITY_IMAGE_MODELS;
 
 export function getCurrentAntigravityModels(): ProviderModelConfig[] {
   return currentModels;
@@ -341,17 +346,25 @@ export function getCurrentAntigravityRouting(): Record<string, AntigravityRoutin
 }
 
 export function getCurrentAntigravityCatalog(): AntigravityCatalog {
-  return { models: currentModels, routing: currentRouting };
+  return {
+    models: currentModels,
+    routing: currentRouting,
+    imageModels: currentImageModels,
+  };
 }
 
 export function applyAntigravityCatalog(catalog: AntigravityCatalog): void {
-  currentModels = catalog.models;
+  currentModels = catalog.models.filter((model) => model.type !== "image");
   currentRouting = catalog.routing;
+  if (catalog.imageModels && catalog.imageModels.length > 0) {
+    currentImageModels = catalog.imageModels;
+  }
 }
 
 export function resetAntigravityCatalogForTests(): void {
   currentModels = ANTIGRAVITY_MODELS;
   currentRouting = { ...ANTIGRAVITY_ROUTING };
+  currentImageModels = ANTIGRAVITY_IMAGE_MODELS;
 }
 
 /** Resolve public model id + thinking effort to Antigravity runtime model id. */

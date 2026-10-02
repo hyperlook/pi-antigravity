@@ -5,20 +5,32 @@ import {
   ANTIGRAVITY_ROUTING,
   applyAntigravityCatalog,
   buildAntigravityCatalog,
+  buildAntigravityImageModels,
   clearModelEnumCache,
   getAntigravityRequestModelId,
   getModelEnum,
   hydrateAntigravityCatalog,
   refreshAntigravityModels,
   registerModelEnum,
+  listProviderModels,
   resetAntigravityCatalogForTests,
   snapshotDynamicModelEnums,
   type AntigravityCatalog,
 } from "../src/models/index.js";
+import { ANTIGRAVITY_IMAGE_API } from "../src/models/image-catalog.js";
 import type { ModelInfoRaw } from "../src/types/types.js";
 
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(`FAILED: ${message}`);
+}
+
+function publishedPersistModels(
+  published: unknown,
+): Array<{ id?: string; type?: string; api?: string }> | undefined {
+  if (!published || typeof published !== "object") return undefined;
+  const persist = "persist" in published ? published.persist : undefined;
+  if (!persist || typeof persist !== "object" || !("models" in persist)) return undefined;
+  return Array.isArray(persist.models) ? persist.models : undefined;
 }
 
 const fallback: AntigravityCatalog = { models: ANTIGRAVITY_MODELS, routing: ANTIGRAVITY_ROUTING };
@@ -52,6 +64,26 @@ assert(
 );
 assert(!catalog.models.some((model) => model.id === "chat_hidden"), "filters hidden models");
 assert(!catalog.models.some((model) => model.id === "gemini-3-pro-image"), "filters image models");
+const imageModels = buildAntigravityImageModels({
+  "gemini-3-pro-image": info("Gemini 3 Pro Image"),
+  "gemini-3-pro-image-preview": info("Gemini 3 Pro Image Preview"),
+  "gemini-3.9-flash-low": info("Gemini 3.9 Flash (Low)"),
+});
+assert(
+  imageModels.some((model) => model.id === "gemini-3-pro-image" && model.type === "image"),
+  "keeps the image seed",
+);
+assert(
+  imageModels.some((model) => model.id === "gemini-3-pro-image-preview" && model.api === ANTIGRAVITY_IMAGE_API),
+  "discovery adds advertised image ids",
+);
+assert(!imageModels.some((model) => model.id === "gemini-3.9-flash-low"), "image catalog ignores chat ids");
+const listed = listProviderModels(catalog);
+assert(listed.some((model) => model.id === "gemini-3.9-flash"), "provider list keeps chat models");
+assert(
+  listed.some((model) => model.id === "gemini-3-pro-image" && model.type === "image"),
+  "provider list appends image models when the chat catalog omitted them",
+);
 assert(
   catalog.routing["gemini-3.9-flash"]?.routing?.medium === "gemini-3.9-flash-medium",
   "routes discovered thinking variants",
@@ -160,6 +192,13 @@ try {
   assert(
     persisted?.modelEnums?.["gemini-10.0-flash-low"] === "MODEL_DYNAMIC_1000",
     "persists discovered enum values",
+  );
+  const storedModels = publishedPersistModels(published);
+  const storedImage = storedModels?.find((model) => model.id === "gemini-3-pro-image");
+  assert(storedImage?.type === "image" && storedImage.api === ANTIGRAVITY_IMAGE_API, "persists image models as image");
+  assert(
+    storedModels?.some((model) => model.id === "gemini-10.0-flash" && model.type !== "image"),
+    "persists discovered chat models without retagging them",
   );
 } finally {
   globalThis.fetch = originalFetch;

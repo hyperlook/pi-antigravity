@@ -1,7 +1,6 @@
 import type {
-  Api,
+  AnyModel,
   Credential,
-  Model,
   ModelsStoreEntry,
   RefreshModelsContext,
 } from "@earendil-works/pi-ai";
@@ -11,6 +10,11 @@ import { DEFAULT_ENDPOINT, fetchAvailableModelsCatalog, parseApiKey } from "../c
 import { ANTIGRAVITY_API } from "../types/types.js";
 import { antigravityEnv, isRecord } from "../utils/util.js";
 import { buildAntigravityCatalog, resolvedCatalog, type AntigravityCatalog } from "./grouping.js";
+import {
+  ANTIGRAVITY_IMAGE_API,
+  buildAntigravityImageModels,
+  listProviderModels,
+} from "./image-catalog.js";
 import {
   ANTIGRAVITY_MODELS,
   ANTIGRAVITY_ROUTING,
@@ -69,7 +73,12 @@ export async function discoverAntigravityModels(
     return { models: [], routing: {} };
   }
   registerDiscoveredModelEnums(models);
-  return buildAntigravityCatalog(models, fallbackCatalog());
+  const chat = buildAntigravityCatalog(models, fallbackCatalog());
+  return {
+    models: chat.models,
+    routing: chat.routing,
+    imageModels: buildAntigravityImageModels(models),
+  };
 }
 
 export async function refreshAntigravityModels(
@@ -77,10 +86,10 @@ export async function refreshAntigravityModels(
 ): Promise<ProviderModelConfig[]> {
   const checkedAt = hydrateAntigravityCatalog(context.stored);
   const current = getCurrentAntigravityCatalog();
-  if (!context.allowNetwork) return current.models;
+  if (!context.allowNetwork) return listProviderModels(current);
 
   const apiKey = apiKeyFromCredential(context.credential);
-  if (!apiKey || context.signal.aborted) return current.models;
+  if (!apiKey || context.signal.aborted) return listProviderModels(current);
 
   const now = Date.now();
   if (
@@ -89,27 +98,28 @@ export async function refreshAntigravityModels(
     now >= checkedAt &&
     now - checkedAt < getCatalogRefreshIntervalMs()
   ) {
-    return current.models;
+    return listProviderModels(current);
   }
 
   try {
     const discovered = await discoverAntigravityModels(apiKey, context.signal);
-    if (context.signal.aborted) return current.models;
+    if (context.signal.aborted) return listProviderModels(current);
     const next = resolvedCatalog(discovered, current);
     if (next.models.length > 0 && discovered.models.length > 0) {
       applyAntigravityCatalog(next);
       const refreshedAt = Date.now();
+      const listed = listProviderModels(getCurrentAntigravityCatalog());
       await context.publish({
         persist: {
-          models: toStoredModels(next.models),
+          models: toStoredModels(listed),
           [ANTIGRAVITY_PERSIST_KEY]: {
-            catalog: next,
+            catalog: getCurrentAntigravityCatalog(),
             checkedAt: refreshedAt,
             modelEnums: snapshotDynamicModelEnums(),
           } satisfies PersistedAntigravityCatalog,
         } as unknown as ModelsStoreEntry,
       });
-      return next.models;
+      return listed;
     }
   } catch (error) {
     // Keep last-known-good models; a failed refresh must not wipe the catalog.
@@ -117,7 +127,7 @@ export async function refreshAntigravityModels(
     if (context.force) throw error;
   }
 
-  return getCurrentAntigravityCatalog().models;
+  return listProviderModels(getCurrentAntigravityCatalog());
 }
 
 function isCatalog(value: unknown): value is AntigravityCatalog {
@@ -144,11 +154,24 @@ function apiKeyFromCredential(credential: Credential | undefined): string | unde
   return undefined;
 }
 
-function toStoredModels(models: ProviderModelConfig[]): Model<Api>[] {
-  return models.map((model) => ({
-    ...model,
-    api: ANTIGRAVITY_API,
-    provider: "antigravity",
-    baseUrl: DEFAULT_ENDPOINT,
-  }));
+function toStoredModels(models: ProviderModelConfig[]): AnyModel[] {
+  return models.map((model) => {
+    const stored = {
+      ...model,
+      provider: "antigravity",
+      baseUrl: model.baseUrl ?? DEFAULT_ENDPOINT,
+    };
+    if (model.type === "image") {
+      return {
+        ...stored,
+        type: "image" as const,
+        api: model.api ?? ANTIGRAVITY_IMAGE_API,
+        output: model.output ?? ["text", "image"],
+      };
+    }
+    return {
+      ...stored,
+      api: model.api ?? ANTIGRAVITY_API,
+    };
+  });
 }

@@ -5,6 +5,8 @@ import type { AntigravityRouting, ModelInfoRaw } from "../types/types.js";
 export type AntigravityCatalog = {
   models: ProviderModelConfig[];
   routing: Record<string, AntigravityRouting>;
+  /** Omitted by older persisted catalogs. Callers then keep the image seed. */
+  imageModels?: ProviderModelConfig[];
 };
 
 type ThinkingLevel = ThinkingEffort;
@@ -57,6 +59,13 @@ const PI_LEVELS = [
 
 const ZERO_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 
+type ChatModelConfig = Extract<ProviderModelConfig, { reasoning: boolean }>;
+
+function asChatModel(model: ProviderModelConfig | undefined): ChatModelConfig | undefined {
+  if (!model || model.type === "image" || model.type === "classifier") return undefined;
+  return model;
+}
+
 export function isSelectableRuntimeModelId(id: string): boolean {
   if (!/^(gemini-|claude-|gpt-oss-)/i.test(id) || /\s/.test(id) || /^MODEL_/i.test(id)) {
     return false;
@@ -70,7 +79,13 @@ export function resolvedCatalog(
   discovered: AntigravityCatalog | undefined,
   current: AntigravityCatalog,
 ): AntigravityCatalog {
-  if (discovered && discovered.models.length > 0) return discovered;
+  if (discovered && discovered.models.length > 0) {
+    return {
+      models: discovered.models,
+      routing: discovered.routing,
+      imageModels: discovered.imageModels?.length ? discovered.imageModels : current.imageModels,
+    };
+  }
   return current;
 }
 
@@ -231,7 +246,7 @@ function synthesizeModel(
   const reasoning =
     advertisedLevels.size > 0 ||
     group.supportsThinking === true ||
-    (group.supportsThinking === undefined && Boolean(template?.reasoning));
+    (group.supportsThinking === undefined && Boolean(asChatModel(template)?.reasoning));
   return {
     model: {
       id: group.publicId,
@@ -241,8 +256,8 @@ function synthesizeModel(
       input: supportsImages ? ["text", "image"] : ["text"],
       ...(supportsImages && template?.inputLimits ? { inputLimits: template.inputLimits } : {}),
       cost: template?.cost ?? ZERO_COST,
-      contextWindow: template?.contextWindow ?? 128000,
-      maxTokens: template?.maxTokens ?? 8192,
+      contextWindow: asChatModel(template)?.contextWindow ?? 128000,
+      maxTokens: asChatModel(template)?.maxTokens ?? 8192,
     },
     routing,
   };
@@ -323,8 +338,8 @@ function routingFromVariants(
   };
 }
 
-function thinkingLevelMapFromLevels(levels: Set<string>): ProviderModelConfig["thinkingLevelMap"] {
-  const map: NonNullable<ProviderModelConfig["thinkingLevelMap"]> = {};
+function thinkingLevelMapFromLevels(levels: Set<string>): ChatModelConfig["thinkingLevelMap"] {
+  const map: NonNullable<ChatModelConfig["thinkingLevelMap"]> = {};
   for (const level of PI_LEVELS) {
     map[level] = levels.has(level) ? level : null;
   }

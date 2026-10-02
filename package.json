@@ -1,6 +1,6 @@
 {
   "name": "@gwylook/pi-antigravity",
-  "version": "0.87.0",
+  "version": "1.0.0",
   "description": "Personal Antigravity / Cloud Code Assist provider for Pi Coding Agent",
   "author": "Rahul Arya",
   "license": "MIT",
@@ -53,14 +53,14 @@
     "access": "public"
   },
   "peerDependencies": {
-    "@earendil-works/pi-ai": ">=0.87.0",
-    "@earendil-works/pi-coding-agent": ">=0.87.0",
-    "@earendil-works/pi-tui": ">=0.87.0"
+    "@earendil-works/pi-ai": ">=1.0.0",
+    "@earendil-works/pi-coding-agent": ">=1.0.0",
+    "@earendil-works/pi-tui": ">=1.0.0"
   },
   "devDependencies": {
-    "@earendil-works/pi-ai": "^0.87.0",
-    "@earendil-works/pi-coding-agent": "^0.87.0",
-    "@earendil-works/pi-tui": "^0.87.0",
+    "@earendil-works/pi-ai": "^1.0.0",
+    "@earendil-works/pi-coding-agent": "^1.0.0",
+    "@earendil-works/pi-tui": "^1.0.0",
     "@eslint/js": "^10.0.1",
     "@types/node": "^26.1.1",
     "eslint": "^10.7.0",
