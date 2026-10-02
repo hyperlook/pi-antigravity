@@ -1,5 +1,10 @@
 # Issue: decouple the stream layer and make retry policy explicit
 
+> **Status: implemented.** Landed in `05a5bf6` (`refactor(stream)`) and
+> `5acf493` (`refactor(retry)`); the SSE transport was then reworked again in
+> 1.0.0 with `streamGenerateContent` as the single Cloud Code transport. Kept as a
+> design record — the `src/` line references and metrics below predate both.
+
 > Local issue draft. Follows the structure of `UPSTREAM_DYNAMIC_MODEL_DISCOVERY.md`.
 > All line references and metrics below were measured against `src/` at `v0.7.3` and
 > can be re-derived with the commands in [Reproducing the measurements](#reproducing-the-measurements).

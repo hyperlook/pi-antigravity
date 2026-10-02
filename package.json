@@ -1,7 +1,7 @@
 {
   "name": "@gwylook/pi-antigravity",
   "version": "1.0.0",
-  "description": "Personal Antigravity / Cloud Code Assist provider for Pi Coding Agent",
+  "description": "Antigravity / Cloud Code Assist provider for Pi Coding Agent 1.0 — chat, web search, url context, and image models",
   "author": "Rahul Arya",
   "license": "MIT",
   "repository": {
@@ -23,7 +23,9 @@
     "provider",
     "web-search",
     "google-search",
-    "url-context"
+    "url-context",
+    "image-generation",
+    "pi-1.0"
   ],
   "files": [
     "LICENSE",

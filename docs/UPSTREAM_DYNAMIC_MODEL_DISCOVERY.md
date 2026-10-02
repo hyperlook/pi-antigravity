@@ -1,5 +1,7 @@
 # Upstream implementation brief: dynamic Antigravity model discovery
 
+> **Status: implemented** in `9ff7ab0`, shipped in 0.87.0. Kept as a design record.
+
 ## Goal
 
 Make the Antigravity backend catalog the source of truth for Pi's selectable model list, so newly launched models can appear without a catalog-only extension release.

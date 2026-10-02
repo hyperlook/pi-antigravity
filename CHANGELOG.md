@@ -4,6 +4,8 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-10-02
+
 ### Breaking
 
 - **Host requirement is now Pi 1.0** (`@earendil-works/pi-ai`, `pi-coding-agent`, `pi-tui` `>=1.0.0`). Older Pi releases no longer resolve this package.
@@ -22,11 +24,12 @@ All notable changes to this project are documented in this file.
 - **Transport failure messages are redacted at the source.** `streamGenerateContent` now runs every failure message through `redactSecrets` in `failure()`, so an HTTP error body or SSE error chunk that echoes a `ya29.` access token, a refresh token, or a `Bearer` header cannot reach the tool result or the transcript. `StreamGenerateFailure.message` is documented as always safe to display.
 - **Image errors are values, not throws.** `requestAntigravityImage` and `generateImages` return `{ ok: false, message }` / `stopReason: "error"`; `generate_image` turns that into a thrown tool error.
 
+## [0.87.0] - 2026-10-01
+
+### Added
+
 - **Pi 0.87 compatibility & image input limits:** Configured per-model image input limits (`inputLimits.images.resize`) for Gemini and Claude models, enabling Pi 0.87's cache-safe image preprocessing and automatic tool-result image resizing.
 - **Dynamic model discovery:** The selectable catalog is refreshed from authenticated `fetchAvailableModels` and grouped into public Pi IDs, so newly enabled models can appear without a catalog-only release. Last-known-good cache plus a conservative static seed remain for cold start. Discovery does not add a new cross-generation fallback; existing Gemini rollout remaps are unchanged.
-
-### Changed
-
 - **Interactive Control Center for `/antigravity.usage`:** `/antigravity.usage` is now a zero-latency interactive dashboard with asynchronous progressive quota loading. Accounts are displayed with clean usernames and two-row barcode sparklines (`▰▰▰▰▱`) for Gemini and Claude/GPT pools across 5h and weekly windows with aligned dynamic countdowns (`2h`, `45m`, `4d`, `18h`). Provides in-dialog keyboard shortcuts (`Enter` to switch, `d` then `y` to unlink, `Esc` to close). Quota reads do not mutate active accounts. Direct CLI arguments (`<index|email>`, `current`, `remove <index|email>`) remain supported.
 
 ### Removed

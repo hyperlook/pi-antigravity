@@ -45,7 +45,9 @@ jobs:
             "
           fi
 
-      - name: Run checks (typecheck, lint, format)
+      # Tag pushes do not trigger ci.yml (PR/push to main only), so the release
+      # path runs the full check gate itself before anything reaches npm.
+      - name: Run checks (typecheck, lint, format, security, tests)
         run: bun run check
 
       - name: Determine npm dist-tag

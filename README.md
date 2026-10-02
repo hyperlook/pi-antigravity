@@ -47,6 +47,18 @@ Restart Pi (or run `/reload`) after installation. To update later:
 pi update npm:@gwylook/pi-antigravity
 ```
 
+### Upgrading to 1.0
+
+1.0 requires Pi **1.0.0 or later**. If you are still on Pi 0.87, stay on `@gwylook/pi-antigravity@^0.87.0` — the peer dependency floor makes 1.0 unresolvable on older Pi.
+
+The extension API also changed in one place:
+
+| Removed in 1.0                      | Use instead                                                                                                                                    |
+| ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `generateAntigravityImage(options)` | `requestAntigravityImage` (one model, no file IO, returns a result) + `saveGeneratedImages`, or the Pi 1.0 `generateImages` provider operation |
+
+No bundled command used the removed helper, so this only affects custom code that imported it from the extension API.
+
 <details>
 <summary>Alternative: Install from GitHub source</summary>
 
