@@ -23,7 +23,7 @@
 
 ## Requirements
 
-- Pi Coding Agent and Pi AI version **0.87.0 or later**
+- Pi Coding Agent and Pi AI version **1.0.0 or later**
 - A Google account that can use the relevant Cloud Code Assist / Antigravity services
 - A browser to complete the Google sign-in. Same-machine is best (the browser hits the local callback automatically); on a remote/headless machine, complete sign-in anywhere and paste the resulting callback URL back into Pi (see [Troubleshooting](#troubleshooting)).
 
@@ -35,10 +35,10 @@ Install the package via npm (recommended):
 pi install npm:@gwylook/pi-antigravity
 ```
 
-To install or lock to a specific version (e.g. matching Pi 0.87.x):
+To install or lock to a specific version (e.g. matching Pi 1.0.x):
 
 ```bash
-pi install npm:@gwylook/pi-antigravity@^0.87.0
+pi install npm:@gwylook/pi-antigravity@^1.0.0
 ```
 
 Restart Pi (or run `/reload`) after installation. To update later:
@@ -128,7 +128,7 @@ Model availability, entitlement, quota groups, and resets are returned by the se
 
 The extension registers three built-in tools for Pi agents out of the box with **zero configuration**:
 
-- **`generate_image`**: Generates images via Gemini image models and saves them inside the project directory (default `.pi/generated-images/`).
+- **`generate_image`**: Generates images via Gemini image models and saves them inside the project directory (default `.pi/generated-images/`). The same models are also registered as Pi 1.0 image models (`antigravity/gemini-3-pro-image`, `antigravity/gemini-3.1-flash-image`) for `models.generateImages` when codemode is on. That path can take reference images but does not save files or accept an aspect ratio; use this tool when either matters. Image models stay out of `/model` — Pi lists only chat models there.
 - **`web_search`**: Provider-native Google web search with Grounding. Injects byte-safe citations (`[1]`, `[2]`), automatically resolves Google redirect tracking links into canonical URLs, and lists verified sources.
 - **`url_context`**: Reads and summarizes public URLs. Features native YouTube multimodal understanding (Gemini processes video streams directly) alongside standard web page extraction.
 

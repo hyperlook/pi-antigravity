@@ -4,7 +4,21 @@ All notable changes to this project are documented in this file.
 
 ## [Unreleased]
 
+### Breaking
+
+- **Host requirement is now Pi 1.0** (`@earendil-works/pi-ai`, `pi-coding-agent`, `pi-tui` `>=1.0.0`). Older Pi releases no longer resolve this package.
+- **`generateAntigravityImage` is gone** from the extension API. Call `requestAntigravityImage` (one model, no file IO, returns a result instead of throwing) plus `saveGeneratedImages`, or use the Pi 1.0 `generateImages` provider operation. No bundled command used it.
+
 ### Added
+
+- **Pi 1.0 image models:** Gemini image models are registered as `type: "image"` on the `antigravity-images` API and served by `generateImages`. Codemode discovers them with `models.getAvailableOfType("image")`. They stay out of `/model` (the host only lists chat models) and out of the chat catalog. `generate_image` remains the path that saves files and sets `aspectRatio`.
+- **Image-to-image input:** `buildImageGenerateRequest` and the provider operation accept `inlineData` parts, so `models.generateImages` can edit supplied images. `generate_image` remains text-only.
+- **Shared Cloud Code SSE transport:** `streamGenerateContent` owns one request's envelope, endpoint fallback, and SSE framing; image generation is its first caller. `web_search` and `url_context` still keep their own loop; adopting it there is follow-up work, tracked in `src/search/client.ts`.
+
+### Changed
+
+- **Model fallback moved out of the transport.** A failed image request no longer silently switches models inside the provider call. `generate_image` walks `IMAGE_MODEL_CANDIDATES` (seeded from the image catalog, so the two lists cannot drift) and reports the model that actually ran.
+- **Image errors are values, not throws.** `requestAntigravityImage` and `generateImages` return `{ ok: false, message }` / `stopReason: "error"`; `generate_image` turns that into a thrown tool error.
 
 - **Pi 0.87 compatibility & image input limits:** Configured per-model image input limits (`inputLimits.images.resize`) for Gemini and Claude models, enabling Pi 0.87's cache-safe image preprocessing and automatic tool-result image resizing.
 - **Dynamic model discovery:** The selectable catalog is refreshed from authenticated `fetchAvailableModels` and grouped into public Pi IDs, so newly enabled models can appear without a catalog-only release. Last-known-good cache plus a conservative static seed remain for cold start. Discovery does not add a new cross-generation fallback; existing Gemini rollout remaps are unchanged.
