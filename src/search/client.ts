@@ -1,14 +1,7 @@
 import type { AgentToolUpdateCallback } from "@earendil-works/pi-coding-agent";
-import {
-  antigravityHeaders,
-  endpointCandidates,
-  jsonOrTextError,
-  parseApiKey,
-} from "../client/client.js";
-import { AntigravityRequestType, AntigravityUserAgent } from "../types/enums.js";
-import { antigravityFetch } from "../utils/http.js";
-import { safeError } from "../utils/security.js";
-import { antigravityRequestEnvelope } from "../utils/util.js";
+import { streamGenerateContent, type StreamGenerateChunk } from "../client/stream-generate.js";
+import { parseApiKey } from "../client/client.js";
+import { isRecord } from "../utils/util.js";
 import {
   deriveSources,
   extractGoogleSearchDetails,
@@ -38,27 +31,61 @@ const SEARCH_MODEL_FALLBACKS = [
   "gemini-3.6-flash-low",
 ];
 
-interface StreamCandidateChunk {
-  error?: { message?: string; code?: number; status?: string };
-  response?: {
-    candidates?: Array<{
-      content?: { parts?: Array<{ text?: string }> };
-      groundingMetadata?: GroundingMetadata;
-      urlContextMetadata?: UrlContextMetadata;
-      url_context_metadata?: UrlContextMetadata;
-    }>;
-  };
-  candidates?: Array<{
-    content?: { parts?: Array<{ text?: string }> };
-    groundingMetadata?: GroundingMetadata;
-    urlContextMetadata?: UrlContextMetadata;
-    url_context_metadata?: UrlContextMetadata;
-  }>;
+interface SearchCandidate {
+  content?: { parts?: unknown };
+  groundingMetadata?: GroundingMetadata;
+  urlContextMetadata?: UrlContextMetadata;
+  url_context_metadata?: UrlContextMetadata;
 }
 
-// SSE loop is still local so this change does not alter search behavior.
-// Adopt `streamGenerateContent` from `../client/stream-generate.ts` (pass `tools`
-// and `onChunk`); keep grounding, citations, and YouTube handling in this module.
+/** Everything one endpoint contributes to an answer, before citations are derived. */
+interface SearchStreamState {
+  text: string;
+  groundingMetadata?: GroundingMetadata;
+  urlContextMetadata?: UrlContextMetadata;
+}
+
+function searchCandidate(chunk: StreamGenerateChunk): SearchCandidate | undefined {
+  const candidates = chunk.candidates;
+  if (!Array.isArray(candidates)) return undefined;
+  return candidates.find(isRecord);
+}
+
+/**
+ * Folds one SSE chunk into the live answer. Text is forwarded as it arrives so
+ * the tool still streams; grounding metadata is kept until the stream ends.
+ */
+function applySearchChunk(
+  state: SearchStreamState,
+  chunk: StreamGenerateChunk,
+  onUpdate?: AgentToolUpdateCallback,
+): void {
+  const candidate = searchCandidate(chunk);
+  if (!candidate) return;
+  const parts = candidate.content?.parts;
+  if (Array.isArray(parts)) {
+    for (const part of parts) {
+      if (!isRecord(part) || typeof part.text !== "string" || !part.text) continue;
+      state.text += part.text;
+      onUpdate?.({
+        content: [{ type: "text", text: state.text }],
+        details: { streaming: true },
+      });
+    }
+  }
+  if (candidate.groundingMetadata) state.groundingMetadata = candidate.groundingMetadata;
+  const urlContextMetadata = candidate.urlContextMetadata || candidate.url_context_metadata;
+  if (urlContextMetadata) state.urlContextMetadata = urlContextMetadata;
+}
+
+/**
+ * Tool-grounded answer over `tools` (google_search, url_context).
+ *
+ * Model preference order and grounding interpretation live here; the request
+ * envelope, endpoint fallback, and SSE framing belong to `streamGenerateContent`.
+ * Throws on bad credentials, on abort, and when every model on the preference
+ * order fails. Every thrown message is already redacted by the transport.
+ */
 export async function executeAntigravitySearchStream(options: {
   apiKey: string;
   contents: SearchContent[];
@@ -67,156 +94,61 @@ export async function executeAntigravitySearchStream(options: {
   signal?: AbortSignal;
   onUpdate?: AgentToolUpdateCallback;
 }): Promise<SearchStreamResult> {
-  const creds = parseApiKey(options.apiKey);
+  // Fail on bad credentials before spending a request; the transport parses too.
+  parseApiKey(options.apiKey);
   const preferredModel = resolveSearchModel(options.model);
   const candidateModels = [
     preferredModel,
     ...SEARCH_MODEL_FALLBACKS.filter((id) => id !== preferredModel),
   ];
 
-  const headers = {
-    ...antigravityHeaders(creds.token),
-    Accept: "text/event-stream",
-  };
-
   let lastError = "No Antigravity endpoint available";
 
   for (const model of candidateModels) {
-    const envelope = antigravityRequestEnvelope(model, false);
-    const requestBody = {
-      project: creds.projectId,
+    if (options.signal?.aborted) throw new Error("Request was aborted");
+
+    let state: SearchStreamState = { text: "" };
+    const streamed = await streamGenerateContent({
+      apiKey: options.apiKey,
       model,
-      request: {
-        contents: options.contents,
-        tools: options.tools,
+      request: { contents: options.contents, tools: options.tools },
+      signal: options.signal,
+      onChunk: (chunk) => applySearchChunk(state, chunk, options.onUpdate),
+      // A dead endpoint must not cost the whole answer; try the next one, then the next model.
+      retryOnStreamError: true,
+      // Text streamed from an abandoned endpoint is not part of the answer.
+      onRetry: () => {
+        state = { text: "" };
       },
-      requestType: AntigravityRequestType.Agent,
-      userAgent: AntigravityUserAgent.Antigravity,
-      requestId: envelope.requestId,
-    };
-    const bodyStr = JSON.stringify(requestBody);
+    });
 
-    for (const endpoint of endpointCandidates()) {
-      if (options.signal?.aborted) throw new Error("Request was aborted");
-
-      try {
-        const response = await antigravityFetch(
-          `${endpoint}/v1internal:streamGenerateContent?alt=sse`,
-          {
-            method: "POST",
-            headers,
-            body: bodyStr,
-            signal: options.signal,
-          },
-        );
-
-        if (!response.ok) {
-          const rawErr = await response.text();
-          lastError = jsonOrTextError(rawErr).slice(0, 400);
-          if (response.status === 404 || [403, 429, 500, 502, 503, 504].includes(response.status)) {
-            continue;
-          }
-          throw new Error(
-            `Antigravity search request failed (${response.status}): ${safeError(lastError)}`,
-          );
-        }
-
-        if (!response.body) {
-          throw new Error("No response body received from Antigravity API");
-        }
-
-        // Stream and parse SSE chunks
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = "";
-        let accumulatedText = "";
-        let groundingMetadata: GroundingMetadata | undefined;
-        let urlContextMetadata: UrlContextMetadata | undefined;
-
-        try {
-          while (true) {
-            if (options.signal?.aborted) throw new Error("Request was aborted");
-            const result = await reader.read();
-            if (result.done) break;
-            if (!(result.value instanceof Uint8Array)) continue;
-
-            buffer += decoder.decode(result.value, { stream: true });
-            const lines = buffer.split("\n");
-            buffer = lines.pop() || "";
-
-            for (const line of lines) {
-              if (!line.startsWith("data:")) continue;
-              const json = line.slice(5).trim();
-              if (!json || json === "[DONE]") continue;
-
-              let chunk: StreamCandidateChunk;
-              try {
-                chunk = JSON.parse(json) as StreamCandidateChunk;
-              } catch {
-                continue;
-              }
-
-              if (chunk.error) {
-                const msg = chunk.error.message || JSON.stringify(chunk.error);
-                throw new Error(
-                  `Antigravity API error (${chunk.error.code || chunk.error.status || "unknown"}): ${msg}`,
-                );
-              }
-
-              const data = chunk.response || chunk;
-              const candidate = data.candidates?.[0];
-
-              if (candidate?.content?.parts) {
-                for (const part of candidate.content.parts) {
-                  if (part.text) {
-                    accumulatedText += part.text;
-                    options.onUpdate?.({
-                      content: [{ type: "text", text: accumulatedText }],
-                      details: { streaming: true },
-                    });
-                  }
-                }
-              }
-
-              if (candidate?.groundingMetadata) {
-                groundingMetadata = candidate.groundingMetadata;
-              }
-              if (candidate?.urlContextMetadata || candidate?.url_context_metadata) {
-                urlContextMetadata = candidate.urlContextMetadata || candidate.url_context_metadata;
-              }
-            }
-          }
-        } finally {
-          reader.releaseLock();
-        }
-
-        // Process citations and grounding results
-        const searchDetails = extractGoogleSearchDetails(groundingMetadata);
-        await resolveGoogleGroundingRedirectUrls(
-          searchDetails.searchResults,
-          searchDetails.citations,
-          options.signal,
-        );
-        const searchResults = sanitizeSearchResults(searchDetails.searchResults);
-        const citations = sanitizeSearchResults(searchDetails.citations);
-
-        return {
-          text: accumulatedText || "No response received.",
-          sources: deriveSources(searchResults, citations),
-          searchQueries: searchDetails.searchQueries,
-          searchResults,
-          citations,
-          groundingMetadata,
-          urlContextMetadata,
-          model,
-        };
-      } catch (err: unknown) {
-        lastError = safeError(err);
-        if (options.signal?.aborted) {
-          throw new Error("Request was aborted", { cause: err });
-        }
-      }
+    if (!streamed.ok) {
+      if (streamed.aborted) throw new Error("Request was aborted");
+      lastError = streamed.status
+        ? `Antigravity search request failed (${streamed.status}): ${streamed.message}`
+        : streamed.message;
+      continue;
     }
+
+    const searchDetails = extractGoogleSearchDetails(state.groundingMetadata);
+    await resolveGoogleGroundingRedirectUrls(
+      searchDetails.searchResults,
+      searchDetails.citations,
+      options.signal,
+    );
+    const searchResults = sanitizeSearchResults(searchDetails.searchResults);
+    const citations = sanitizeSearchResults(searchDetails.citations);
+
+    return {
+      text: state.text || "No response received.",
+      sources: deriveSources(searchResults, citations),
+      searchQueries: searchDetails.searchQueries,
+      searchResults,
+      citations,
+      groundingMetadata: state.groundingMetadata,
+      urlContextMetadata: state.urlContextMetadata,
+      model,
+    };
   }
 
   throw new Error(`Failed to execute search via Antigravity: ${lastError}`);

@@ -390,5 +390,3 @@ export async function generateAntigravityImages(
     });
   }
 }
-
-

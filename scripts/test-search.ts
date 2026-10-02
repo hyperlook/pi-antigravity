@@ -1,5 +1,6 @@
 import {
   applyCitations,
+  executeAntigravitySearchStream,
   executeUrlContext,
   executeWebSearch,
   extractGoogleSearchDetails,
@@ -283,6 +284,198 @@ async function testExecuteWebSearchAndUrlContextMock() {
   console.log("✓ testExecuteWebSearchAndUrlContextMock passed");
 }
 
+/**
+ * The search tools ride the shared transport: a 404 endpoint, then an endpoint
+ * that dies mid-stream, must not leak their partial text into the answer.
+ */
+async function testSearchRidesSharedTransport() {
+  const originalFetch = globalThis.fetch;
+  const endpoints: string[] = [];
+  // The endpoint walk and the preferred model must come from the defaults here.
+  const envKeys = [
+    "ANTIGRAVITY_BASE_URL",
+    "NOAGY_BASE_URL",
+    "ANTIGRAVITY_SEARCH_MODEL",
+    "NOAGY_SEARCH_MODEL",
+  ];
+  const savedEnv = new Map(envKeys.map((key) => [key, process.env[key]]));
+  for (const key of envKeys) delete process.env[key];
+
+  const sse = (payload: unknown) => `data: ${JSON.stringify(payload)}\n`;
+  const streamOf = (chunks: string[]) => {
+    const encoder = new TextEncoder();
+    let index = 0;
+    return new Response(
+      new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (index >= chunks.length) {
+            controller.close();
+            return;
+          }
+          controller.enqueue(encoder.encode(chunks[index]!));
+          index += 1;
+        },
+      }),
+      { status: 200, headers: { "Content-Type": "text/event-stream" } },
+    );
+  };
+
+  try {
+    globalThis.fetch = async (input: RequestInfo | URL) => {
+      const url = String(input);
+      endpoints.push(url);
+      // 1st endpoint: gone. 2nd: streams a text part, then an API error.
+      // 3rd: the healthy answer.
+      if (url.includes("daily-cloudcode-pa.googleapis.com")) return new Response("missing", { status: 404 });
+      if (url.includes("sandbox.googleapis.com")) {
+        return streamOf([
+          sse({ response: { candidates: [{ content: { parts: [{ text: "half an answer " }] } }] } }),
+          sse({ error: { code: 429, message: "quota exhausted" } }),
+        ]);
+      }
+      return streamOf([
+        sse({
+          response: {
+            candidates: [
+              {
+                content: { parts: [{ text: "the whole answer" }] },
+                groundingMetadata: {
+                  webSearchQueries: ["q"],
+                  groundingChunks: [{ web: { title: "Docs", uri: "https://example.com/d" } }],
+                },
+              },
+            ],
+          },
+        }),
+        "data: [DONE]\n\n",
+      ]);
+    };
+
+    const updates: string[] = [];
+    const result = await executeAntigravitySearchStream({
+      apiKey: JSON.stringify({ token: "test-token", projectId: "test-project" }),
+      contents: [{ role: "user", parts: [{ text: "q" }] }],
+      tools: [{ google_search: {} }],
+      onUpdate: (update) => {
+        const text = update.content?.[0]?.text;
+        if (typeof text === "string") updates.push(text);
+      },
+    });
+
+    assert(endpoints.length === 3, `walked all three endpoints, got ${endpoints.length}`);
+    assert(result.text === "the whole answer", `no partial text leaked, got: ${result.text}`);
+    assert(result.model === "gemini-3.7-flash-tiered", "keeps the preferred model");
+    assert(result.sources.length === 1, "grounding still becomes sources");
+    assert(
+      !updates.some((text) => text.includes("half an answer the whole answer")),
+      "the retry does not append to the dead endpoint's text",
+    );
+    assert(updates[updates.length - 1] === "the whole answer", "streams the live answer");
+
+    // Every model on the preference order can fail; then search throws.
+    globalThis.fetch = async () => new Response("missing", { status: 404 });
+    try {
+      await executeAntigravitySearchStream({
+        apiKey: JSON.stringify({ token: "test-token", projectId: "test-project" }),
+        contents: [{ role: "user", parts: [{ text: "q" }] }],
+        tools: [{ google_search: {} }],
+      });
+      throw new Error("expected search to fail");
+    } catch (error) {
+      assert(
+        error instanceof Error && /Failed to execute search via Antigravity/.test(error.message),
+        `throws when all models fail: ${String(error)}`,
+      );
+    }
+
+    const controller = new AbortController();
+    controller.abort();
+    globalThis.fetch = async () => {
+      throw new Error("should not be called after abort");
+    };
+    try {
+      await executeAntigravitySearchStream({
+        apiKey: JSON.stringify({ token: "test-token", projectId: "test-project" }),
+        contents: [{ role: "user", parts: [{ text: "q" }] }],
+        tools: [{ google_search: {} }],
+        signal: controller.signal,
+      });
+      throw new Error("expected abort");
+    } catch (error) {
+      assert(
+        error instanceof Error && error.message === "Request was aborted",
+        `abort is an error here: ${String(error)}`,
+      );
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+    for (const key of envKeys) {
+      const saved = savedEnv.get(key);
+      if (saved === undefined) delete process.env[key];
+      else process.env[key] = saved;
+    }
+  }
+  console.log("✓ testSearchRidesSharedTransport passed");
+}
+
+/** Backend error bodies reach the transcript; credentials echoed in them must not. */
+async function testSearchRedactsBackendErrors() {
+  const originalFetch = globalThis.fetch;
+  const envKeys = ["ANTIGRAVITY_BASE_URL", "NOAGY_BASE_URL", "ANTIGRAVITY_SEARCH_MODEL"];
+  const savedEnv = new Map(envKeys.map((key) => [key, process.env[key]]));
+  for (const key of envKeys) delete process.env[key];
+  const token = "ya29.AbCdEf-secret-access-token";
+  const request = {
+    apiKey: JSON.stringify({ token: "test-token", projectId: "test-project" }),
+    contents: [{ role: "user" as const, parts: [{ text: "q" }] }],
+  };
+
+  try {
+    // Non-retryable HTTP status: the backend echoes the credential back.
+    globalThis.fetch = async () =>
+      new Response(JSON.stringify({ error: { message: `bad request for ${token}` } }), {
+        status: 400,
+      });
+    try {
+      await executeAntigravitySearchStream({ ...request, tools: [{ google_search: {} }] });
+      throw new Error("expected search to fail");
+    } catch (error) {
+      assert(error instanceof Error, "throws an Error");
+      assert(!error.message.includes(token), `HTTP body token redacted: ${error.message}`);
+      assert(
+        error.message.includes("[redacted-access-token]"),
+        `keeps a readable reason: ${error.message}`,
+      );
+      assert(
+        error.message.includes("Antigravity search request failed (400)"),
+        "keeps the status",
+      );
+    }
+
+    // Mid-stream API error chunk carries the same kind of text.
+    globalThis.fetch = async () =>
+      new Response(
+        `data: ${JSON.stringify({ error: { code: 500, message: `Bearer ${token} rejected` } })}\n\n`,
+        { status: 200, headers: { "Content-Type": "text/event-stream" } },
+      );
+    try {
+      await executeAntigravitySearchStream({ ...request, tools: [{ google_search: {} }] });
+      throw new Error("expected search to fail");
+    } catch (error) {
+      assert(error instanceof Error, "throws an Error");
+      assert(!error.message.includes(token), `SSE chunk token redacted: ${error.message}`);
+    }
+  } finally {
+    globalThis.fetch = originalFetch;
+    for (const key of envKeys) {
+      const saved = savedEnv.get(key);
+      if (saved === undefined) delete process.env[key];
+      else process.env[key] = saved;
+    }
+  }
+  console.log("✓ testSearchRedactsBackendErrors passed");
+}
+
 async function main() {
   await testApplyCitationsAscii();
   await testApplyCitationsMultibyteUtf8();
@@ -291,6 +484,8 @@ async function main() {
   await testGoogleGroundingDetails();
   await testSearchModelResolution();
   await testExecuteWebSearchAndUrlContextMock();
+  await testSearchRidesSharedTransport();
+  await testSearchRedactsBackendErrors();
   console.log("All search and grounding tests passed successfully!");
 }
 

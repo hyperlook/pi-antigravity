@@ -1,6 +1,6 @@
 import { AntigravityRequestType, AntigravityUserAgent } from "../types/enums.js";
 import { antigravityFetch } from "../utils/http.js";
-import { safeError } from "../utils/security.js";
+import { redactSecrets, safeError } from "../utils/security.js";
 import { antigravityRequestEnvelope, isRecord } from "../utils/util.js";
 import { antigravityHeaders, endpointCandidates, jsonOrTextError, parseApiKey } from "./client.js";
 
@@ -8,10 +8,9 @@ import { antigravityHeaders, endpointCandidates, jsonOrTextError, parseApiKey } 
  * One Cloud Code `streamGenerateContent` call.
  *
  * Owns the envelope, endpoint fallback, and SSE framing. It does not choose a
- * model, rotate accounts, or interpret candidates. Image generation calls this.
- * `web_search` and `url_context` still duplicate the loop in `src/search/client.ts`;
- * the next change should pass `tools` and `onChunk` here and leave grounding,
- * citations, and YouTube handling in `src/search/`.
+ * model, rotate accounts, or interpret candidates. Image generation and
+ * `web_search` / `url_context` both call this; model preference order, grounding,
+ * citations, and YouTube handling stay with the callers.
  */
 export const STREAM_GENERATE_CONTENT_PATH = "/v1internal:streamGenerateContent?alt=sse";
 
@@ -42,6 +41,7 @@ export type StreamGenerateFailure = {
   ok: false;
   aborted: boolean;
   status?: number;
+  /** Already redacted: backend error bodies can echo credentials. */
   message: string;
   chunks: StreamGenerateChunk[];
 };
@@ -56,6 +56,10 @@ function abortedResult(chunks: StreamGenerateChunk[] = []): StreamGenerateFailur
   return { ok: false, aborted: true, message: "Request was aborted", chunks };
 }
 
+/**
+ * The single funnel for transport failures, so `message` is always safe to show
+ * the model or the transcript: HTTP bodies and SSE error chunks are redacted here.
+ */
 function failure(
   message: string,
   extra?: { status?: number; chunks?: StreamGenerateChunk[] },
@@ -64,7 +68,7 @@ function failure(
     ok: false,
     aborted: false,
     status: extra?.status,
-    message,
+    message: redactSecrets(message),
     chunks: extra?.chunks ?? [],
   };
 }
@@ -145,8 +149,19 @@ export async function streamGenerateContent(options: {
   model: string;
   request: StreamGenerateRequest;
   signal?: AbortSignal;
-  /** Search and URL context can stream text from here. Image generation can ignore it. */
+  /** Search and URL context stream text from here. Image generation ignores it. */
   onChunk?: (chunk: StreamGenerateChunk) => void;
+  /**
+   * An attempt abandoned mid-stream (API error chunk, missing body) is normally
+   * final. Search opts in so a bad endpoint cannot take down a whole answer: it
+   * walks the next endpoint instead, then the next model.
+   */
+  retryOnStreamError?: boolean;
+  /**
+   * Called whenever an attempt is dropped and the next endpoint is tried, so a
+   * streaming caller can discard text already emitted by the dead endpoint.
+   */
+  onRetry?: (reason: string) => void;
 }): Promise<StreamGenerateResult> {
   if (options.signal?.aborted) return abortedResult();
 
@@ -184,16 +199,23 @@ export async function streamGenerateContent(options: {
       if (!response.ok) {
         const message = jsonOrTextError(await response.text()).slice(0, 400);
         last = failure(message, { status: response.status });
-        if (isRetryableStreamStatus(response.status)) continue;
-        return last;
+        if (!isRetryableStreamStatus(response.status)) return last;
+        options.onRetry?.(message);
+        continue;
       }
       const parsed = await readSse(response, options.signal, options.onChunk);
       if (parsed.aborted) return abortedResult(parsed.chunks);
-      if (parsed.error) return failure(parsed.error, { chunks: parsed.chunks });
+      if (parsed.error) {
+        last = failure(parsed.error, { chunks: parsed.chunks });
+        if (!options.retryOnStreamError) return last;
+        options.onRetry?.(parsed.error);
+        continue;
+      }
       return { ok: true, model: options.model, endpoint, chunks: parsed.chunks };
     } catch (error) {
       if (options.signal?.aborted) return abortedResult();
       last = failure(safeError(error));
+      options.onRetry?.(last.message);
     }
   }
   return last;

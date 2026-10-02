@@ -13,11 +13,13 @@ All notable changes to this project are documented in this file.
 
 - **Pi 1.0 image models:** Gemini image models are registered as `type: "image"` on the `antigravity-images` API and served by `generateImages`. Codemode discovers them with `models.getAvailableOfType("image")`. They stay out of `/model` (the host only lists chat models) and out of the chat catalog. `generate_image` remains the path that saves files and sets `aspectRatio`.
 - **Image-to-image input:** `buildImageGenerateRequest` and the provider operation accept `inlineData` parts, so `models.generateImages` can edit supplied images. `generate_image` remains text-only.
-- **Shared Cloud Code SSE transport:** `streamGenerateContent` owns one request's envelope, endpoint fallback, and SSE framing; image generation is its first caller. `web_search` and `url_context` still keep their own loop; adopting it there is follow-up work, tracked in `src/search/client.ts`.
+- **Shared Cloud Code SSE transport:** `streamGenerateContent` owns one request's envelope, endpoint fallback, and SSE framing. Image generation, `web_search`, and `url_context` all call it; `src/search/client.ts` is down to model preference order and grounding interpretation, with no second copy of the SSE loop.
 
 ### Changed
 
 - **Model fallback moved out of the transport.** A failed image request no longer silently switches models inside the provider call. `generate_image` walks `IMAGE_MODEL_CANDIDATES` (seeded from the image catalog, so the two lists cannot drift) and reports the model that actually ran.
+- **Search endpoint fallback is now the transport's rule.** `web_search` / `url_context` walk the model preference order and let the shared transport walk endpoints. A non-retryable HTTP status (for example 400) stops the endpoint walk instead of re-sending the same doomed request to every endpoint and then every model; mid-stream errors and missing bodies still fall through to the next endpoint, and text streamed by an abandoned endpoint is dropped rather than prepended to the retry.
+- **Transport failure messages are redacted at the source.** `streamGenerateContent` now runs every failure message through `redactSecrets` in `failure()`, so an HTTP error body or SSE error chunk that echoes a `ya29.` access token, a refresh token, or a `Bearer` header cannot reach the tool result or the transcript. `StreamGenerateFailure.message` is documented as always safe to display.
 - **Image errors are values, not throws.** `requestAntigravityImage` and `generateImages` return `{ ok: false, message }` / `stopReason: "error"`; `generate_image` turns that into a thrown tool error.
 
 - **Pi 0.87 compatibility & image input limits:** Configured per-model image input limits (`inputLimits.images.resize`) for Gemini and Claude models, enabling Pi 0.87's cache-safe image preprocessing and automatic tool-result image resizing.
