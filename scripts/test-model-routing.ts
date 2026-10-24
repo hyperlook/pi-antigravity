@@ -729,7 +729,7 @@ const context = {
     {
       role: "assistant",
       content: [
-        { type: "thinking", thinking: "plan" },
+        { type: "thinking", thinking: "plan", thinkingSignature: "test-signature" },
         { type: "text", text: "hi" },
         { type: "toolCall", id: "call-1", name: "read", arguments: { path: "a.ts" } },
       ],
@@ -761,7 +761,11 @@ const context = {
 const contents = convertMessages(model, context, "claude-sonnet-4-6");
 assert.equal(contents.length, 3);
 assert.equal(contents[0]?.role, "user");
-assert.deepEqual(contents[1]?.parts[0], { thought: true, text: "plan" });
+assert.deepEqual(contents[1]?.parts[0], {
+  thought: true,
+  text: "plan",
+  thoughtSignature: "test-signature",
+});
 assert.ok(
   contents[1]?.parts.some((part) => "functionCall" in part && part.functionCall.id === "call-1"),
 );
@@ -1413,7 +1417,7 @@ assert.equal(opusCost?.output, 75);
 // Wire fingerprint: User-Agent format (pure agy CLI)
 assert.equal(
   defaultUserAgent(),
-  "antigravity/cli/1.2.4 (aidev_client; os_type=linux; arch=amd64; cl=982146307; auth_method=consumer)",
+  "antigravity/cli/1.4.2 (aidev_client; os_type=linux; arch=amd64; cl=982146307; auth_method=consumer)",
 );
 
 // Wire fingerprint: Headers hygiene & environment isolation

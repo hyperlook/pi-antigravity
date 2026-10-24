@@ -46,9 +46,25 @@ export type AntigravityApi = typeof ANTIGRAVITY_API;
 
 export interface CredentialSource {
   current(): Promise<AntigravityApiKey>;
-  /** Call only on a hard quota wall. Returns undefined when exhausted. */
+  /** Select an eligible untried account for pre-output recovery; undefined when exhausted. */
   rotate(excluded: ReadonlySet<string>): Promise<AntigravityApiKey | undefined>;
+  /** Optional V3 hooks; legacy single-key and test sources retain their V2 contract. */
+  forRequest?(runtimeModel: string): CredentialSource;
+  prepare?(runtimeModel: string, projectId: string): Promise<AntigravityApiKey>;
+  identity?(): string | undefined;
+  failed?(observation: CredentialFailure): Promise<boolean>;
+  succeeded?(): Promise<void>;
+  release?(): Promise<void>;
 }
+
+export type CredentialFailure = {
+  runtimeModel: string;
+  projectId: string;
+  status?: number;
+  body?: string;
+  headers?: Headers;
+  timeout?: boolean;
+};
 
 export type AntigravityStreamOptions = Omit<SimpleStreamOptions, "toolChoice"> & {
   toolChoice?: ToolChoice;
