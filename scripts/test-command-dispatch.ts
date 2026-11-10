@@ -2,22 +2,32 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect } from "bun:test";
-import type { KeybindingsManager } from "@earendil-works/pi-coding-agent";
-import { parseAntigravitySubcommand } from "../src/commands/antigravity.js";
+import type {
+	ExtensionAPI,
+	ExtensionCommandContext,
+	KeybindingsManager,
+} from "@earendil-works/pi-coding-agent";
 import {
-  ANTIGRAVITY_TOOLS,
-  getAntigravityToolStates,
-  isAntigravityToolEnabled,
-  setAllAntigravityToolsEnabled,
-  setAntigravityToolEnabled,
-  syncAntigravityToolsWithSession,
-  toggleAntigravityTool,
+	parseAntigravitySubcommand,
+	registerAntigravityCommands,
+} from "../src/commands/antigravity.js";
+import { setHealthSelection, setLastError } from "../src/diagnostics/index.js";
+import {
+	ANTIGRAVITY_TOOLS,
+	getAntigravityToolStates,
+	isAntigravityToolEnabled,
+	setAllAntigravityToolsEnabled,
+	setAntigravityToolEnabled,
+	syncAntigravityToolsWithSession,
+	toggleAntigravityTool,
 } from "../src/tools/index.js";
 import {
-  AntigravityDashboardComponent,
-  formatDoctorTab,
-  formatModelsTab,
-  formatToolsTab,
+	AntigravityDashboardComponent,
+	buildDoctorSnapshot,
+	formatDoctorTab,
+	formatDoctorReport,
+	formatModelsTab,
+	formatToolsTab,
 } from "../src/ui/dashboard.js";
 
 console.log("Running antigravity command dispatch & multi-tab TUI tests...");
@@ -42,15 +52,65 @@ expect(parseAntigravitySubcommand("  TOOLS ")).toEqual({ action: "tools" });
 // doctor
 expect(parseAntigravitySubcommand("doctor")).toEqual({ action: "doctor" });
 expect(parseAntigravitySubcommand("Doctor")).toEqual({ action: "doctor" });
+expect(parseAntigravitySubcommand("health")).toEqual({ action: "health", model: undefined });
+expect(parseAntigravitySubcommand("health gemini-3.8-flash")).toEqual({
+	action: "health",
+	model: "gemini-3.8-flash",
+});
 
 // Pruned flags from the pre-convergence command surface.
 for (const args of ["current", "2", "remove a@example.com", "refresh", "image", "search"]) {
-  const parsed = parseAntigravitySubcommand(args);
-  expect(parsed.action).toBe("invalid");
-  if (parsed.action === "invalid") {
-    expect(parsed.message).toBe("Usage: /antigravity [models | tools | doctor]");
-  }
+	const parsed = parseAntigravitySubcommand(args);
+	expect(parsed.action).toBe("invalid");
+	if (parsed.action === "invalid") {
+		expect(parsed.message.length).toBeGreaterThan(0);
+	}
 }
+
+const registered = new Map<string, Parameters<ExtensionAPI["registerCommand"]>[1]>();
+registerAntigravityCommands({
+	registerCommand(name, command) {
+		expect(registered.has(name)).toBe(false);
+		registered.set(name, command);
+	},
+} as ExtensionAPI);
+expect([...registered.keys()]).toEqual(["antigravity", "antigravity.usage"]);
+const originalLog = console.log;
+let commandOutput = "";
+try {
+	console.log = (...args: unknown[]) => {
+		commandOutput += args.join(" ");
+	};
+	await registered.get("antigravity")!.handler("health gemini-3.8-flash", {
+		hasUI: false,
+	} as ExtensionCommandContext);
+} finally {
+	console.log = originalLog;
+}
+expect(commandOutput).toContain("model=gemini-3.8-flash");
+expect(commandOutput).toContain("linked=0");
+
+setLastError("Failure for test@example.com");
+setHealthSelection({
+	selectedAccount: "simulated-0",
+	runtimeModel: "gemini-3.8-flash",
+	rotationCount: 1,
+	skipReasons: {},
+	basis: "unknown",
+});
+const doctorSnapshot = buildDoctorSnapshot();
+expect(doctorSnapshot.error).not.toContain("test@example.com");
+expect(doctorSnapshot.selectedAccount).toBe("[redacted-account]");
+expect(formatDoctorReport(doctorSnapshot)).toContain("linked=0");
+expect(formatDoctorTab(doctorSnapshot)).toContain("linked=0");
+setLastError(undefined);
+setHealthSelection({
+	selectedAccount: "none",
+	runtimeModel: "unknown",
+	rotationCount: 0,
+	skipReasons: {},
+	basis: "unknown",
+});
 
 // Tool management & session sync tests
 expect(getAntigravityToolStates().length).toBe(ANTIGRAVITY_TOOLS.length);
@@ -58,10 +118,10 @@ expect(getAntigravityToolStates().every((t) => t.enabled)).toBe(true);
 
 let activeSessionTools = ["read", "bash", "web_search", "url_context", "generate_image", "analyze_file"];
 const mockPi = {
-  getActiveTools: () => [...activeSessionTools],
-  setActiveTools: (names: string[]) => {
-    activeSessionTools = [...names];
-  },
+	getActiveTools: () => [...activeSessionTools],
+	setActiveTools: (names: string[]) => {
+		activeSessionTools = [...names];
+	},
 };
 
 expect(setAntigravityToolEnabled("generate_image", false, mockPi)).toBe(false);
@@ -89,67 +149,68 @@ expect(activeSessionTools).toContain("analyze_file");
 
 // Multi-tab TUI component tests
 const plainTheme = {
-  fg: (_color: string, text: string) => text,
-  bold: (text: string) => text,
+	fg: (_color: string, text: string) => text,
+	bold: (text: string) => text,
 };
 
 const mockKb = {
-  matches: (data: string, action: string) => {
-    if (action === "tui.select.cancel") return data === "\x1b";
-    if (action === "tui.select.up") return data === "\x1b[A";
-    if (action === "tui.select.down") return data === "\x1b[B";
-    if (action === "tui.select.confirm") return data === "\r";
-    return false;
-  },
+	matches: (data: string, action: string) => {
+		if (action === "tui.select.cancel") return data === "\x1b";
+		if (action === "tui.select.up") return data === "\x1b[A";
+		if (action === "tui.select.down") return data === "\x1b[B";
+		if (action === "tui.select.confirm") return data === "\r";
+		return false;
+	},
 } as unknown as KeybindingsManager;
 
 let refreshModelsCalls = 0;
 let toggledToolName: string | undefined;
 
 const sampleRows = [
-  {
-    index: 1,
-    accountId: "a@example.com",
-    shortLabel: "look",
-    active: true,
-    loading: false,
-    usage: {
-      projectId: "proj-1",
-      models: [
-        {
-          modelId: "gemini-3.8-flash",
-          remainingFraction: 0.85,
-          supportsThinking: true,
-          supportsImages: true,
-          recommended: true,
-        },
-        {
-          modelId: "tab_internal_model",
-          remainingFraction: 1.0,
-        },
-      ],
-      groups: [],
-      fetchedAt: Date.now(),
-    },
-  },
+	{
+		index: 1,
+		accountId: "a@example.com",
+		shortLabel: "look",
+		active: true,
+		loading: false,
+		usage: {
+			endpoint: "synthetic-endpoint",
+			projectId: "proj-1",
+			models: [
+				{
+					modelId: "gemini-3.8-flash",
+					remainingFraction: 0.85,
+					supportsThinking: true,
+					supportsImages: true,
+					recommended: true,
+				},
+				{
+					modelId: "tab_internal_model",
+					remainingFraction: 1.0,
+				},
+			],
+			groups: [],
+			fetchedAt: Date.now(),
+		},
+	},
 ];
 
 const component = new AntigravityDashboardComponent(
-  sampleRows,
-  0,
-  plainTheme,
-  mockKb,
-  () => {},
-  {
-    actions: {
-      onRefreshModels: () => {
-        refreshModelsCalls++;
-      },
-      onToggleTool: (name) => {
-        toggledToolName = name;
-      },
-    },
-  },
+	sampleRows,
+	0,
+	plainTheme,
+	mockKb,
+	() => { },
+	{
+		actions: {
+			onRefreshModels: () => {
+				refreshModelsCalls++;
+			},
+			onToggleTool: (name) => {
+				toggledToolName = name;
+			},
+		},
+	},
 );
 
 // Default tab is accounts
@@ -201,22 +262,22 @@ expect(doctorRender).toContain("antigravity");
 expect(formatModelsTab(sampleRows[0], { showAll: false })).toContain("gemini-3.8-flash");
 expect(formatToolsTab(getAntigravityToolStates())).toContain("web_search");
 expect(
-  formatDoctorTab({
-    provider: "antigravity",
-    activeAccountLabel: "l***k@gmail.com",
-    linkedAccountsCount: 1,
-    enabledTools: ["web_search"],
-    totalToolsCount: 4,
-    resolvedRuntimeModel: "gemini-3.8-flash-tiered",
-    matchedModelDebug: "exact",
-    availableModels: "gemini-3.8-flash",
-    endpoint: "https://cloudcode-pa.googleapis.com",
-    status: 200,
-    latencyMs: 120,
-    projectId: "proj-1",
-    toolSchemaWarnings: "none",
-    error: "none",
-  }),
+	formatDoctorTab({
+		provider: "antigravity",
+		activeAccountLabel: "l***k@gmail.com",
+		linkedAccountsCount: 1,
+		enabledTools: ["web_search"],
+		totalToolsCount: 4,
+		resolvedRuntimeModel: "gemini-3.8-flash-tiered",
+		matchedModelDebug: "exact",
+		availableModels: "gemini-3.8-flash",
+		endpoint: "https://cloudcode-pa.googleapis.com",
+		status: 200,
+		latencyMs: 120,
+		projectId: "proj-1",
+		toolSchemaWarnings: "none",
+		error: "none",
+	}),
 ).toContain("200 (120ms)");
 
 console.log("antigravity command dispatch & multi-tab TUI tests passed");

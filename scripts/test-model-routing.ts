@@ -729,7 +729,7 @@ const context = {
     {
       role: "assistant",
       content: [
-        { type: "thinking", thinking: "plan" },
+        { type: "thinking", thinking: "plan", thinkingSignature: "test-signature" },
         { type: "text", text: "hi" },
         { type: "toolCall", id: "call-1", name: "read", arguments: { path: "a.ts" } },
       ],
@@ -761,7 +761,11 @@ const context = {
 const contents = convertMessages(model, context, "claude-sonnet-4-6");
 assert.equal(contents.length, 3);
 assert.equal(contents[0]?.role, "user");
-assert.deepEqual(contents[1]?.parts[0], { thought: true, text: "plan" });
+assert.deepEqual(contents[1]?.parts[0], {
+  thought: true,
+  text: "plan",
+  thoughtSignature: "test-signature",
+});
 assert.ok(
   contents[1]?.parts.some((part) => "functionCall" in part && part.functionCall.id === "call-1"),
 );
@@ -1860,6 +1864,222 @@ assert.equal(
 assert.equal(fromTranscript.request.contents[0]?.role, "user");
 assert.equal(fromTranscript.request.contents[0]?.parts[0]?.text, "hi");
 assert.equal(fromTranscript.request.tools?.[0]?.functionDeclarations[0]?.name, "read_file");
+
+// ─── Orphaned tool_use repair ───────────────────────────────────────────────
+// Reproduces the exact failure: host context compactor breaks tool_use/tool_result
+// adjacency so Claude rejects the payload with a 400. The fix in convertMessages()
+// must downgrade orphaned functionCall parts to text summaries.
+
+// Case 1: assistant has 4 tool_use blocks but the following user turn has 0 tool_results
+// (all results were dropped by context compaction).
+const orphanedAllContext = {
+  messages: [
+    { role: "user", content: "process 5 images", timestamp: 0 },
+    {
+      role: "assistant",
+      content: [
+        { type: "text", text: "I'll check the tasks." },
+        { type: "toolCall", id: "toolu_vrtx_01A", name: "task_output", arguments: { target: "st_01" } },
+        { type: "toolCall", id: "toolu_vrtx_01B", name: "task_output", arguments: { target: "st_02" } },
+        { type: "toolCall", id: "toolu_vrtx_01C", name: "task_output", arguments: { target: "st_03" } },
+        { type: "toolCall", id: "toolu_vrtx_01D", name: "task_output", arguments: { target: "st_04" } },
+      ],
+      api: "antigravity-api",
+      provider: "antigravity",
+      model: "claude-opus-4-6",
+      stopReason: "toolUse",
+      timestamp: 1,
+    },
+    // Host compacted away the tool_results; next message is injected text.
+    { role: "user", content: "continue with the images", timestamp: 2 },
+    {
+      role: "assistant",
+      content: [{ type: "text", text: "Generating images now." }],
+      api: "antigravity-api",
+      provider: "antigravity",
+      model: "claude-opus-4-6",
+      stopReason: "stop",
+      timestamp: 3,
+    },
+  ],
+} as unknown as Context;
+
+const orphanedAllContents = convertMessages(model, orphanedAllContext, "claude-opus-4-6");
+// Must not have any functionCall parts — they should all be converted to text.
+const hasOrphanedCalls = orphanedAllContents.some(
+  (turn) => turn.parts.some((part) => "functionCall" in part),
+);
+assert.equal(hasOrphanedCalls, false, "orphaned functionCall parts must be removed");
+// The text summary should preserve tool names.
+const modelTurn = orphanedAllContents.find(
+  (turn) => turn.role === "model" && turn.parts.some((p) => "text" in p && p.text.includes("task_output")),
+);
+assert.ok(modelTurn, "orphaned calls must be converted to text mentioning tool name");
+console.log("PASS orphaned tool_use: all results dropped by compaction");
+
+// Case 2: assistant has 4 tool_use blocks but only 2 have matching results
+// (partial compaction loss).
+const orphanedPartialContext = {
+  messages: [
+    { role: "user", content: "check status", timestamp: 0 },
+    {
+      role: "assistant",
+      content: [
+        { type: "text", text: "Checking." },
+        { type: "toolCall", id: "call-A", name: "task_output", arguments: { target: "st_01" } },
+        { type: "toolCall", id: "call-B", name: "generate_image", arguments: { prompt: "cat" } },
+        { type: "toolCall", id: "call-C", name: "task_output", arguments: { target: "st_02" } },
+        { type: "toolCall", id: "call-D", name: "read", arguments: { path: "x.ts" } },
+      ],
+      api: "antigravity-api",
+      provider: "antigravity",
+      model: "claude-opus-4-6",
+      stopReason: "toolUse",
+      timestamp: 1,
+    },
+    // Only call-A and call-D have results; call-B and call-C were lost.
+    {
+      role: "toolResult",
+      toolCallId: "call-A",
+      toolName: "task_output",
+      content: [{ type: "text", text: "running" }],
+      isError: false,
+      timestamp: 2,
+    },
+    {
+      role: "toolResult",
+      toolCallId: "call-D",
+      toolName: "read",
+      content: [{ type: "text", text: "export const x = 1;" }],
+      isError: false,
+      timestamp: 3,
+    },
+    { role: "user", content: "ok next", timestamp: 4 },
+  ],
+} as unknown as Context;
+
+const orphanedPartialContents = convertMessages(model, orphanedPartialContext, "claude-opus-4-6");
+// call-A and call-D should survive as functionCall; call-B and call-C should become text.
+const survivingCalls = orphanedPartialContents.flatMap((turn) =>
+  turn.parts.filter((part) => "functionCall" in part).map((p) => (p as any).functionCall.id),
+);
+assert.ok(survivingCalls.includes("call-A"), "matched call-A must survive");
+assert.ok(survivingCalls.includes("call-D"), "matched call-D must survive");
+assert.ok(!survivingCalls.includes("call-B"), "orphaned call-B must be removed");
+assert.ok(!survivingCalls.includes("call-C"), "orphaned call-C must be removed");
+// Orphaned tool names should appear as text.
+const textParts = orphanedPartialContents.flatMap((turn) =>
+  turn.parts.filter((p) => "text" in p).map((p) => (p as any).text),
+);
+const hasOrphanedText = textParts.some((t: string) => t.includes("generate_image"));
+assert.ok(hasOrphanedText, "orphaned generate_image must appear as text summary");
+console.log("PASS orphaned tool_use: partial result loss preserves matched pairs");
+
+// Case 3: no next turn at all after the assistant tool_use (tail position).
+// The existing final-turn check throws; orphan repair should run first and
+// convert everything to text so the throw is avoided.
+const orphanedTailContext = {
+  messages: [
+    { role: "user", content: "do it", timestamp: 0 },
+    {
+      role: "assistant",
+      content: [
+        { type: "toolCall", id: "call-tail", name: "bash", arguments: { command: "ls" } },
+      ],
+      api: "antigravity-api",
+      provider: "antigravity",
+      model: "claude-opus-4-6",
+      stopReason: "toolUse",
+      timestamp: 1,
+    },
+  ],
+} as unknown as Context;
+
+// Before the fix this would throw "missing tool result(s) for the final assistant tool call".
+// After the fix the orphaned call is downgraded to text, and the tail check appends a
+// continuation text instead of throwing.
+let tailThrew = false;
+try {
+  convertMessages(model, orphanedTailContext, "claude-opus-4-6");
+} catch {
+  tailThrew = true;
+}
+assert.equal(tailThrew, false, "orphaned tail tool_use must not throw");
+console.log("PASS orphaned tool_use: tail position no longer throws");
+
+// — Orphaned tool_use: errored/aborted assistant skipped but its toolResults survive —
+// This reproduces the exact bug: host sends an assistant turn with tool calls
+// that has stopReason "error", followed by the toolResult messages. The assistant
+// turn is skipped (line 327-328), but the toolResults become functionResponse
+// parts with no matching functionCall.
+const erroredAssistantContext = {
+  messages: [
+    { role: "user", content: "generate images", timestamp: Date.now() },
+    {
+      role: "assistant",
+      content: [
+        { type: "text", text: "I'll generate them" },
+        { type: "toolCall", id: "toolu_err_01", name: "generate_image", arguments: { prompt: "cat" } },
+        { type: "toolCall", id: "toolu_err_02", name: "generate_image", arguments: { prompt: "dog" } },
+        { type: "toolCall", id: "toolu_err_03", name: "task_output", arguments: { task_id: "st_1" } },
+      ],
+      api: "antigravity-api",
+      provider: "antigravity",
+      model: "claude-opus-4-6",
+      usage: zeroUsage,
+      stopReason: "error",
+      timestamp: Date.now(),
+    },
+    {
+      role: "toolResult",
+      toolCallId: "toolu_err_01",
+      toolName: "generate_image",
+      isError: false,
+      content: [{ type: "text", text: "image saved" }],
+      timestamp: Date.now(),
+    },
+    {
+      role: "toolResult",
+      toolCallId: "toolu_err_02",
+      toolName: "generate_image",
+      isError: true,
+      content: [{ type: "text", text: "quota exhausted" }],
+      timestamp: Date.now(),
+    },
+    {
+      role: "toolResult",
+      toolCallId: "toolu_err_03",
+      toolName: "task_output",
+      isError: false,
+      content: [{ type: "text", text: "running" }],
+      timestamp: Date.now(),
+    },
+    { role: "user", content: "continue", timestamp: Date.now() },
+  ],
+} as unknown as Context;
+const convertedErrored = convertMessages(claudeOpusModel, erroredAssistantContext, "claude-opus-4-6-thinking");
+// The errored assistant turn is skipped entirely. Its 3 toolResult messages
+// must NOT become functionResponse parts (which would crash Claude with 400).
+// They should be converted to text observations.
+for (const turn of convertedErrored) {
+  for (const part of turn.parts) {
+    assert.ok(
+      !("functionResponse" in part),
+      "errored assistant's toolResults must not become functionResponse parts",
+    );
+    assert.ok(
+      !("functionCall" in part),
+      "errored assistant's toolCalls must not become functionCall parts",
+    );
+  }
+}
+// All content merges into one user turn via appendTurn (same role coalescing).
+// The key invariant: no functionCall or functionResponse parts exist.
+assert.ok(convertedErrored.length >= 1, "must produce at least one turn");
+// Verify the observations appear as text
+const allText = convertedErrored.flatMap((t) => t.parts.filter((p): p is { text: string } => "text" in p).map((p) => p.text));
+assert.ok(allText.some((t) => t.includes("[Observation from")), "observations must appear as text");
+console.log("PASS orphaned tool_use: errored assistant with toolResults converted to text");
 
 console.log(
   `model routing: ${routeCases.length} cases, tool schema, errors, project ids, token clamping, and message conversion passed`,
